@@ -47,28 +47,33 @@ func NewService(traktClient *trakt.Client, overseerrClient *overseerr.Client, cf
 // ProcessCalendar checks the calendar and requests new seasons as needed
 func (s *Service) ProcessCalendar(ctx context.Context) ([]ProcessResult, error) {
 	startTime := time.Now()
-	logger.Info("[watcher] ========================================")
-	logger.Info("[watcher] Starting calendar processing")
-	logger.Info("[watcher] ========================================")
+
+	logger.Info("")
+	logger.Info("╔══════════════════════════════════════════════════════════════╗")
+	logger.Info("║              CALENDAR PROCESSING STARTED                     ║")
+	logger.Info("╚══════════════════════════════════════════════════════════════╝")
+
 	if s.cfg.DryRun {
-		logger.Warn("[watcher] DRY RUN MODE - no actual requests will be made")
+		logger.Warn("⚠️  DRY RUN MODE - No actual requests will be made")
 	}
 
 	// Get upcoming shows from Trakt calendar
+	logger.Infof("📅 Fetching calendar for next %d days...", s.cfg.CalendarDays)
 	calendarItems, err := s.trakt.GetMyShowsCalendar(ctx, s.cfg.CalendarDays)
 	if err != nil {
-		logger.Errorf("[watcher] Failed to get calendar: %v", err)
+		logger.Errorf("❌ Failed to get calendar: %v", err)
 		return nil, fmt.Errorf("getting calendar: %w", err)
 	}
 
 	if len(calendarItems) == 0 {
-		logger.Info("[watcher] No upcoming shows in calendar")
+		logger.Info("📭 No upcoming shows in calendar")
 		return nil, nil
 	}
 
 	// Group by show to avoid duplicate processing
 	showSeasons := s.groupByShowAndSeason(calendarItems)
-	logger.Infof("[watcher] Found %d shows with upcoming episodes", len(showSeasons))
+	logger.Infof("📺 Found %d shows with upcoming episodes", len(showSeasons))
+	logger.Info("")
 
 	var results []ProcessResult
 
@@ -100,40 +105,54 @@ func (s *Service) printSummary(results []ProcessResult, startTime time.Time) {
 		showInfo := fmt.Sprintf("%s S%02d", r.ShowTitle, r.Season)
 		switch r.Action {
 		case "requested", "dry_run":
-			willRequest = append(willRequest, fmt.Sprintf("  • %s (%s)", showInfo, r.Reason))
+			willRequest = append(willRequest, fmt.Sprintf("   ✓ %-35s  ← %s", showInfo, r.Reason))
 		case "skipped", "already_requested":
-			willSkip = append(willSkip, fmt.Sprintf("  • %s (%s)", showInfo, r.Reason))
+			willSkip = append(willSkip, fmt.Sprintf("   • %-35s  ← %s", showInfo, r.Reason))
 		case "error":
-			errors = append(errors, fmt.Sprintf("  • %s (%s)", showInfo, r.Error))
+			errors = append(errors, fmt.Sprintf("   ✗ %-35s  ← %s", showInfo, r.Error))
 		}
 	}
 
-	logger.Info("[watcher] ========================================")
-	logger.Info("[watcher] SUMMARY")
-	logger.Info("[watcher] ========================================")
+	logger.Info("┌──────────────────────────────────────────────────────────────┐")
+	logger.Info("│                         RESULTS                              │")
+	logger.Info("└──────────────────────────────────────────────────────────────┘")
 
 	if len(willRequest) > 0 {
+		logger.Info("")
 		if s.cfg.DryRun {
-			logger.Warnf("[watcher] WOULD REQUEST (%d):", len(willRequest))
+			logger.Warnf("📥 WOULD REQUEST (%d):", len(willRequest))
 		} else {
-			logger.Infof("[watcher] REQUESTED (%d):", len(willRequest))
+			logger.Infof("📥 REQUESTED (%d):", len(willRequest))
 		}
-		logger.Info(strings.Join(willRequest, "\n"))
+		for _, line := range willRequest {
+			if s.cfg.DryRun {
+				logger.Warn(line)
+			} else {
+				logger.Info(line)
+			}
+		}
 	}
 
 	if len(willSkip) > 0 {
-		logger.Infof("[watcher] SKIPPED (%d):", len(willSkip))
-		logger.Info(strings.Join(willSkip, "\n"))
+		logger.Info("")
+		logger.Infof("⏭️  SKIPPED (%d):", len(willSkip))
+		for _, line := range willSkip {
+			logger.Info(line)
+		}
 	}
 
 	if len(errors) > 0 {
-		logger.Errorf("[watcher] ERRORS (%d):", len(errors))
-		logger.Error(strings.Join(errors, "\n"))
+		logger.Info("")
+		logger.Errorf("❌ ERRORS (%d):", len(errors))
+		for _, line := range errors {
+			logger.Error(line)
+		}
 	}
 
-	logger.Info("[watcher] ----------------------------------------")
-	logger.Infof("[watcher] Completed in %v", time.Since(startTime).Round(time.Millisecond))
-	logger.Info("[watcher] ========================================")
+	logger.Info("")
+	logger.Info("────────────────────────────────────────────────────────────────")
+	logger.Infof("⏱️  Completed in %v", time.Since(startTime).Round(time.Millisecond))
+	logger.Info("")
 }
 
 type calendarItem struct {
@@ -240,7 +259,7 @@ func (s *Service) shouldRequestSeason(progress *trakt.ShowProgress, targetSeason
 
 	// If user has already watched any episodes of target season, it's already available
 	if targetSeasonProgress != nil && targetSeasonProgress.Completed > 0 {
-		return false, fmt.Sprintf("already watching S%02d (%d/%d eps)",
+		return false, fmt.Sprintf("watching S%02d (%d/%d eps)",
 			targetSeason, targetSeasonProgress.Completed, targetSeasonProgress.Aired)
 	}
 
@@ -249,13 +268,13 @@ func (s *Service) shouldRequestSeason(progress *trakt.ShowProgress, targetSeason
 		// If target season exists in progress but 0 completed, user might have it but not started
 		// This means S01 is likely already available
 		if targetSeasonProgress != nil {
-			return false, "S01 already available (0 watched)"
+			return false, "S01 available (not started)"
 		}
 
 		// No S01 in progress - check if they've only watched specials (S00)
 		for _, sp := range progress.Seasons {
 			if sp.Number == 0 && sp.Completed > 0 {
-				return true, "watched specials only, need S01"
+				return true, "watched specials only"
 			}
 		}
 
@@ -278,13 +297,12 @@ func (s *Service) shouldRequestSeason(progress *trakt.ShowProgress, targetSeason
 	}
 
 	if prevSeasonProgress.Aired == 0 {
-		return false, fmt.Sprintf("S%02d not aired yet", prevSeason)
+		return false, fmt.Sprintf("S%02d not aired", prevSeason)
 	}
 
 	if prevSeasonProgress.Completed < prevSeasonProgress.Aired {
 		pct := float64(prevSeasonProgress.Completed) / float64(prevSeasonProgress.Aired) * 100
-		return false, fmt.Sprintf("S%02d incomplete (%d/%d = %.0f%%)",
-			prevSeason, prevSeasonProgress.Completed, prevSeasonProgress.Aired, pct)
+		return false, fmt.Sprintf("S%02d incomplete (%.0f%%)", prevSeason, pct)
 	}
 
 	return true, fmt.Sprintf("S%02d complete", prevSeason)
@@ -330,3 +348,6 @@ func (s *Service) GetStats() Stats {
 
 	return stats
 }
+
+// unused but keeping for reference
+var _ = strings.Join

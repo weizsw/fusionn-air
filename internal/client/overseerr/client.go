@@ -26,24 +26,6 @@ func NewClient(cfg config.OverseerrConfig) *Client {
 		SetRetryMaxWaitTime(5 * time.Second).
 		AddRetryCondition(func(r *resty.Response, err error) bool {
 			return err != nil || r.StatusCode() >= 500
-		}).
-		OnBeforeRequest(func(c *resty.Client, r *resty.Request) error {
-			logger.Debugf("[overseerr] --> %s %s", r.Method, r.URL)
-			if r.Body != nil {
-				logger.Debugf("[overseerr] --> body: %+v", r.Body)
-			}
-			return nil
-		}).
-		OnAfterResponse(func(c *resty.Client, r *resty.Response) error {
-			logger.Debugf("[overseerr] <-- %s %s [%d] %v",
-				r.Request.Method, r.Request.URL, r.StatusCode(), r.Time())
-			if r.IsError() {
-				logger.Warnf("[overseerr] error response: %s", r.String())
-			}
-			return nil
-		}).
-		OnError(func(r *resty.Request, err error) {
-			logger.Errorf("[overseerr] request failed: %s %s error=%v", r.Method, r.URL, err)
 		})
 
 	return &Client{client: client}
@@ -63,10 +45,9 @@ func (c *Client) SearchTV(ctx context.Context, query string) (*SearchResult, err
 	}
 
 	if resp.IsError() {
-		return nil, fmt.Errorf("API error: status=%d body=%s", resp.StatusCode(), resp.String())
+		return nil, fmt.Errorf("API error: status=%d", resp.StatusCode())
 	}
 
-	logger.Debugf("[overseerr] search '%s' returned %d results", query, result.TotalResults)
 	return &result, nil
 }
 
@@ -83,10 +64,9 @@ func (c *Client) GetTVByTMDB(ctx context.Context, tmdbID int) (*TVDetails, error
 	}
 
 	if resp.IsError() {
-		return nil, fmt.Errorf("API error: status=%d body=%s", resp.StatusCode(), resp.String())
+		return nil, fmt.Errorf("API error: status=%d", resp.StatusCode())
 	}
 
-	logger.Debugf("[overseerr] TV TMDB=%d name=%s seasons=%d", tmdbID, details.Name, details.NumberOfSeasons)
 	return &details, nil
 }
 
@@ -97,8 +77,6 @@ func (c *Client) RequestTV(ctx context.Context, tmdbID int, seasons []int) (*Req
 		MediaID:   tmdbID,
 		Seasons:   seasons,
 	}
-
-	logger.Infof("[overseerr] requesting TMDB=%d seasons=%v", tmdbID, seasons)
 
 	var result RequestResponse
 	resp, err := c.client.R().
@@ -115,7 +93,7 @@ func (c *Client) RequestTV(ctx context.Context, tmdbID int, seasons []int) (*Req
 		return nil, fmt.Errorf("API error: status=%d body=%s", resp.StatusCode(), resp.String())
 	}
 
-	logger.Infof("[overseerr] created request ID=%d for TMDB=%d seasons=%v", result.ID, tmdbID, seasons)
+	logger.Infof("📥 Requested TMDB=%d seasons=%v via Overseerr", tmdbID, seasons)
 	return &result, nil
 }
 
@@ -129,7 +107,6 @@ func (c *Client) IsSeasonRequested(details *TVDetails, seasonNum int) bool {
 	for _, req := range details.MediaInfo.Requests {
 		for _, s := range req.Seasons {
 			if s.SeasonNumber == seasonNum {
-				logger.Debugf("[overseerr] season %d already in request ID=%d", seasonNum, req.ID)
 				return true
 			}
 		}
@@ -139,7 +116,6 @@ func (c *Client) IsSeasonRequested(details *TVDetails, seasonNum int) bool {
 	for _, s := range details.MediaInfo.Seasons {
 		if s.SeasonNumber == seasonNum {
 			if s.Status >= MediaStatusPending {
-				logger.Debugf("[overseerr] season %d status=%d (pending or better)", seasonNum, s.Status)
 				return true
 			}
 		}

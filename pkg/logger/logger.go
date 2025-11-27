@@ -2,6 +2,7 @@ package logger
 
 import (
 	"os"
+	"time"
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -10,24 +11,45 @@ import (
 var Log *zap.SugaredLogger
 
 func Init(isDev bool) {
-	var config zap.Config
+	var encoder zapcore.Encoder
+	var level zapcore.Level
+
+	encoderConfig := zapcore.EncoderConfig{
+		TimeKey:       "time",
+		LevelKey:      "level",
+		MessageKey:    "msg",
+		StacktraceKey: "", // Hide stacktrace in normal logs
+		EncodeTime:    customTimeEncoder,
+		EncodeCaller:  nil, // Hide caller
+	}
 
 	if isDev {
-		config = zap.NewDevelopmentConfig()
-		config.EncoderConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder
+		// Development: colorful console output
+		level = zapcore.DebugLevel
+		encoderConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder
+		encoderConfig.ConsoleSeparator = " "
+		encoder = zapcore.NewConsoleEncoder(encoderConfig)
 	} else {
-		config = zap.NewProductionConfig()
+		// Production: clean console output (no JSON)
+		level = zapcore.InfoLevel
+		encoderConfig.EncodeLevel = zapcore.CapitalLevelEncoder
+		encoderConfig.ConsoleSeparator = " "
+		encoder = zapcore.NewConsoleEncoder(encoderConfig)
 	}
 
-	config.EncoderConfig.TimeKey = "time"
-	config.EncoderConfig.EncodeTime = zapcore.TimeEncoderOfLayout("2006-01-02 15:04:05")
+	core := zapcore.NewCore(
+		encoder,
+		zapcore.AddSync(os.Stdout),
+		level,
+	)
 
-	logger, err := config.Build()
-	if err != nil {
-		panic(err)
-	}
-
+	logger := zap.New(core)
 	Log = logger.Sugar()
+}
+
+// customTimeEncoder formats time as "15:04:05" for cleaner logs
+func customTimeEncoder(t time.Time, enc zapcore.PrimitiveArrayEncoder) {
+	enc.AppendString(t.Format("15:04:05"))
 }
 
 func Sync() {
