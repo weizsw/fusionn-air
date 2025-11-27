@@ -102,17 +102,34 @@ func (c *Client) RequestTV(ctx context.Context, tmdbID int, seasons []int) (*Req
 	return &result, nil
 }
 
-// IsSeasonRequested checks if a season is already requested or available
-func (c *Client) IsSeasonRequested(details *TVDetails, seasonNum int) bool {
+// SeasonRequestInfo contains details about a season's request status
+type SeasonRequestInfo struct {
+	Requested   bool
+	Status      MediaStatus
+	RequestedBy string // Username of who requested it (empty if not requested or available)
+}
+
+// GetSeasonRequestInfo returns detailed info about a season's request status
+func (c *Client) GetSeasonRequestInfo(details *TVDetails, seasonNum int) SeasonRequestInfo {
+	info := SeasonRequestInfo{}
+
 	if details.MediaInfo == nil {
-		return false
+		return info
 	}
 
 	// Check if season is in any existing request
 	for _, req := range details.MediaInfo.Requests {
 		for _, s := range req.Seasons {
 			if s.SeasonNumber == seasonNum {
-				return true
+				info.Requested = true
+				if req.RequestedBy != nil {
+					if req.RequestedBy.DisplayName != "" {
+						info.RequestedBy = req.RequestedBy.DisplayName
+					} else {
+						info.RequestedBy = req.RequestedBy.Username
+					}
+				}
+				return info
 			}
 		}
 	}
@@ -120,13 +137,19 @@ func (c *Client) IsSeasonRequested(details *TVDetails, seasonNum int) bool {
 	// Check season availability status
 	for _, s := range details.MediaInfo.Seasons {
 		if s.SeasonNumber == seasonNum {
+			info.Status = s.Status
 			if s.Status >= MediaStatusPending {
-				return true
+				info.Requested = true
 			}
 		}
 	}
 
-	return false
+	return info
+}
+
+// IsSeasonRequested checks if a season is already requested or available
+func (c *Client) IsSeasonRequested(details *TVDetails, seasonNum int) bool {
+	return c.GetSeasonRequestInfo(details, seasonNum).Requested
 }
 
 // GetSeasonStatus returns the current status of a specific season
