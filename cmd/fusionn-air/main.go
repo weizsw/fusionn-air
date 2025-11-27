@@ -55,12 +55,12 @@ func main() {
 	if err := traktClient.Initialize(ctx); err != nil {
 		logger.Fatalf("❌ Trakt auth failed: %v", err)
 	}
-	logger.Info("✓  Trakt connected")
+	logger.Info("✅  Trakt connected")
 
 	// Initialize Overseerr client
 	logger.Info("🔗 Connecting to Overseerr...")
 	overseerrClient := overseerr.NewClient(cfg.Overseerr)
-	logger.Info("✓  Overseerr configured")
+	logger.Info("✅  Overseerr configured")
 
 	// Initialize Sonarr client (if cleanup enabled)
 	var sonarrClient *sonarr.Client
@@ -69,7 +69,7 @@ func main() {
 	if cfg.Cleanup.Enabled {
 		logger.Info("🔗 Connecting to Sonarr...")
 		sonarrClient = sonarr.NewClient(cfg.Sonarr)
-		logger.Info("✓  Sonarr configured")
+		logger.Info("✅  Sonarr configured")
 
 		cleanupService = cleanup.NewService(sonarrClient, traktClient, cfg.Cleanup, cfg.Scheduler.DryRun)
 		logger.Infof("🧹 Cleanup: enabled (delay=%d days)", cfg.Cleanup.DelayDays)
@@ -121,7 +121,7 @@ func main() {
 	logger.Infof("🌐 API server: http://localhost:%d", cfg.Server.Port)
 	logger.Info("")
 	logger.Info("────────────────────────────────────────────────────────────────")
-	logger.Info("✓  Ready! Waiting for scheduled runs...")
+	logger.Info("✅  Ready! Waiting for scheduled runs...")
 	logger.Info("────────────────────────────────────────────────────────────────")
 
 	// Run immediately on startup if configured
