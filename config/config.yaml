@@ -13,13 +13,26 @@ trakt:
 overseerr:
   base_url: "http://localhost:5055"
   api_key: ""
+  user_id: 0 # Request as specific user (0 = API key owner, find ID in Overseerr user settings)
 
+# Sonarr API - Settings > General > API Key
+sonarr:
+  base_url: "http://localhost:8989"
+  api_key: ""
+
+# Shared scheduler settings (applies to both watcher and cleanup)
 scheduler:
-  # Cron expression for calendar check (default: every 6 hours)
-  cron: "0 */6 * * *"
-  # How many days ahead to check calendar
-  calendar_days: 14
-  # Dry run mode - logs what would be requested without actually requesting
-  dry_run: false
-  # Run immediately on startup (before waiting for cron schedule)
-  run_on_start: true
+  cron: "0 */6 * * *" # Every 6 hours
+  dry_run: false # Log only, no actual requests/deletions
+  run_on_start: true # Run immediately on startup
+
+# Watcher - auto-request new seasons via Overseerr
+watcher:
+  enabled: true
+  calendar_days: 14 # Days ahead to check for upcoming episodes
+
+# Cleanup - auto-remove fully watched series from Sonarr
+cleanup:
+  enabled: false
+  delay_days: 3 # Days to wait after fully watched before removing
+  exclusions: [] # Series titles to never remove, e.g. ["Breaking Bad"]

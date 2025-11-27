@@ -12,7 +12,7 @@
 # Build artifacts
 bin/
 dist/
-fusionn
+fusionn-air
 *.exe
 
 # Docs

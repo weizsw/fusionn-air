@@ -17,7 +17,8 @@ import (
 type Service struct {
 	trakt     *trakt.Client
 	overseerr *overseerr.Client
-	cfg       config.SchedulerConfig
+	cfg       config.WatcherConfig
+	dryRun    bool
 
 	mu          sync.RWMutex
 	lastRun     time.Time
@@ -36,11 +37,12 @@ type ProcessResult struct {
 	Error     string    `json:"error,omitempty"`
 }
 
-func NewService(traktClient *trakt.Client, overseerrClient *overseerr.Client, cfg config.SchedulerConfig) *Service {
+func NewService(traktClient *trakt.Client, overseerrClient *overseerr.Client, cfg config.WatcherConfig, dryRun bool) *Service {
 	return &Service{
 		trakt:     traktClient,
 		overseerr: overseerrClient,
 		cfg:       cfg,
+		dryRun:    dryRun,
 	}
 }
 
@@ -53,7 +55,7 @@ func (s *Service) ProcessCalendar(ctx context.Context) ([]ProcessResult, error) 
 	logger.Info("║              CALENDAR PROCESSING STARTED                     ║")
 	logger.Info("╚══════════════════════════════════════════════════════════════╝")
 
-	if s.cfg.DryRun {
+	if s.dryRun {
 		logger.Warn("⚠️  DRY RUN MODE - No actual requests will be made")
 	}
 
@@ -119,13 +121,13 @@ func (s *Service) printSummary(results []ProcessResult, startTime time.Time) {
 
 	if len(willRequest) > 0 {
 		logger.Info("")
-		if s.cfg.DryRun {
+		if s.dryRun {
 			logger.Warnf("📥 WOULD REQUEST (%d):", len(willRequest))
 		} else {
 			logger.Infof("📥 REQUESTED (%d):", len(willRequest))
 		}
 		for _, line := range willRequest {
-			if s.cfg.DryRun {
+			if s.dryRun {
 				logger.Warn(line)
 			} else {
 				logger.Info(line)
@@ -204,17 +206,10 @@ func (s *Service) processShow(ctx context.Context, item calendarItem) ProcessRes
 		return result
 	}
 
-	// Determine if we should request this season
+	// Determine if we should request this season based on watch progress
 	shouldRequest, reason := s.shouldRequestSeason(progress, item.season)
 	if !shouldRequest {
 		result.Action = "skipped"
-		result.Reason = reason
-		return result
-	}
-
-	// In dry-run mode, skip Overseerr entirely
-	if s.cfg.DryRun {
-		result.Action = "dry_run"
 		result.Reason = reason
 		return result
 	}
@@ -230,6 +225,13 @@ func (s *Service) processShow(ctx context.Context, item calendarItem) ProcessRes
 	if s.overseerr.IsSeasonRequested(tvDetails, item.season) {
 		result.Action = "already_requested"
 		result.Reason = "already in Overseerr"
+		return result
+	}
+
+	// In dry-run mode, don't actually request
+	if s.dryRun {
+		result.Action = "dry_run"
+		result.Reason = reason
 		return result
 	}
 

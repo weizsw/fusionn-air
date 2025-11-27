@@ -10,10 +10,12 @@ import (
 	"time"
 
 	"github.com/fusionn-air/internal/client/overseerr"
+	"github.com/fusionn-air/internal/client/sonarr"
 	"github.com/fusionn-air/internal/client/trakt"
 	"github.com/fusionn-air/internal/config"
 	"github.com/fusionn-air/internal/handler"
 	"github.com/fusionn-air/internal/scheduler"
+	"github.com/fusionn-air/internal/service/cleanup"
 	"github.com/fusionn-air/internal/service/watcher"
 	"github.com/fusionn-air/internal/version"
 	"github.com/fusionn-air/pkg/logger"
@@ -41,7 +43,7 @@ func main() {
 	}
 
 	if cfg.Scheduler.DryRun {
-		logger.Warn("⚠️  DRY RUN MODE - No actual requests will be made")
+		logger.Warn("⚠️  DRY RUN MODE - No actual requests/deletions will be made")
 	}
 
 	// Initialize Trakt client
@@ -59,15 +61,35 @@ func main() {
 	overseerrClient := overseerr.NewClient(cfg.Overseerr)
 	logger.Info("✓  Overseerr configured")
 
-	// Initialize services
-	watcherService := watcher.NewService(traktClient, overseerrClient, cfg.Scheduler)
+	// Initialize Sonarr client (if cleanup enabled)
+	var sonarrClient *sonarr.Client
+	var cleanupService *cleanup.Service
+
+	if cfg.Cleanup.Enabled {
+		logger.Info("🔗 Connecting to Sonarr...")
+		sonarrClient = sonarr.NewClient(cfg.Sonarr)
+		logger.Info("✓  Sonarr configured")
+
+		cleanupService = cleanup.NewService(sonarrClient, traktClient, cfg.Cleanup, cfg.Scheduler.DryRun)
+		logger.Infof("🧹 Cleanup: enabled (delay=%d days)", cfg.Cleanup.DelayDays)
+	} else {
+		logger.Info("🧹 Cleanup: disabled")
+	}
+
+	// Initialize watcher service
+	var watcherService *watcher.Service
+	if cfg.Watcher.Enabled {
+		watcherService = watcher.NewService(traktClient, overseerrClient, cfg.Watcher, cfg.Scheduler.DryRun)
+		logger.Infof("👁️  Watcher: enabled (calendar_days=%d)", cfg.Watcher.CalendarDays)
+	} else {
+		logger.Info("👁️  Watcher: disabled")
+	}
 
 	// Initialize scheduler
-	sched := scheduler.New(watcherService)
+	sched := scheduler.New(watcherService, cleanupService)
 	if err := sched.Start(cfg.Scheduler.Cron); err != nil {
 		logger.Fatalf("❌ Scheduler error: %v", err)
 	}
-	logger.Infof("⏰ Scheduler: %s", cfg.Scheduler.Cron)
 
 	// Initialize HTTP server
 	if !isDev {
@@ -78,7 +100,7 @@ func main() {
 	router.Use(gin.Recovery())
 	router.Use(requestLogger())
 
-	h := handler.New(watcherService, sched)
+	h := handler.New(watcherService, cleanupService, sched)
 	h.RegisterRoutes(router)
 
 	srv := &http.Server{
@@ -104,7 +126,7 @@ func main() {
 	// Run immediately on startup if configured
 	if cfg.Scheduler.RunOnStart {
 		logger.Info("")
-		logger.Info("🚀 Running initial check (run_on_start=true)...")
+		logger.Info("🚀 Running initial jobs (run_on_start=true)...")
 		sched.RunNow()
 	}
 
