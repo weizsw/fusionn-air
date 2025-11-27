@@ -82,3 +82,13 @@ type WatchedEpisode struct {
 	Plays         int       `json:"plays"`
 	LastWatchedAt time.Time `json:"last_watched_at"`
 }
+
+// SeasonSummary from /shows/{id}/seasons
+type SeasonSummary struct {
+	Number        int    `json:"number"`
+	IDs           IDs    `json:"ids"`
+	EpisodeCount  int    `json:"episode_count"`  // Total episodes in season
+	AiredEpisodes int    `json:"aired_episodes"` // Episodes that have aired
+	Title         string `json:"title"`
+	Overview      string `json:"overview"`
+}

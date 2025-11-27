@@ -165,3 +165,28 @@ func (c *Client) GetLastCompletedSeason(progress *ShowProgress) int {
 	}
 	return lastCompleted
 }
+
+// GetShowSeasons returns season summaries including total episode counts
+func (c *Client) GetShowSeasons(ctx context.Context, showID int) ([]SeasonSummary, error) {
+	if err := c.ensureAuth(ctx); err != nil {
+		return nil, fmt.Errorf("auth: %w", err)
+	}
+
+	path := fmt.Sprintf("/shows/%d/seasons?extended=full", showID)
+
+	var seasons []SeasonSummary
+	resp, err := c.client.R().
+		SetContext(ctx).
+		SetResult(&seasons).
+		Get(path)
+
+	if err != nil {
+		return nil, fmt.Errorf("getting show seasons: %w", err)
+	}
+
+	if resp.IsError() {
+		return nil, fmt.Errorf("API error: status=%d", resp.StatusCode())
+	}
+
+	return seasons, nil
+}

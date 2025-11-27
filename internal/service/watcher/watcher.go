@@ -206,8 +206,15 @@ func (s *Service) processShow(ctx context.Context, item calendarItem) ProcessRes
 		return result
 	}
 
+	// Get season info for total episode counts
+	seasons, err := s.trakt.GetShowSeasons(ctx, item.show.IDs.Trakt)
+	if err != nil {
+		// Non-fatal, just use aired count if we can't get total
+		seasons = nil
+	}
+
 	// Determine if we should request this season based on watch progress
-	shouldRequest, reason := s.shouldRequestSeason(progress, item.season)
+	shouldRequest, reason := s.shouldRequestSeason(progress, seasons, item.season)
 	if !shouldRequest {
 		result.Action = "skipped"
 		result.Reason = reason
@@ -222,9 +229,16 @@ func (s *Service) processShow(ctx context.Context, item calendarItem) ProcessRes
 		return result
 	}
 
-	if s.overseerr.IsSeasonRequested(tvDetails, item.season) {
+	requestInfo := s.overseerr.GetSeasonRequestInfo(tvDetails, item.season)
+	if requestInfo.Requested {
 		result.Action = "already_requested"
-		result.Reason = "already in Overseerr"
+		if requestInfo.RequestedBy != "" {
+			result.Reason = fmt.Sprintf("already requested by %s", requestInfo.RequestedBy)
+		} else if requestInfo.Status >= 4 { // Available or partially available
+			result.Reason = "already available in Overseerr"
+		} else {
+			result.Reason = "already requested in Overseerr"
+		}
 		return result
 	}
 
@@ -249,7 +263,13 @@ func (s *Service) processShow(ctx context.Context, item calendarItem) ProcessRes
 }
 
 // shouldRequestSeason determines if a season should be requested based on watch progress
-func (s *Service) shouldRequestSeason(progress *trakt.ShowProgress, targetSeason int) (bool, string) {
+func (s *Service) shouldRequestSeason(progress *trakt.ShowProgress, seasons []trakt.SeasonSummary, targetSeason int) (bool, string) {
+	// Build map of total episode counts per season
+	totalEps := make(map[int]int)
+	for _, s := range seasons {
+		totalEps[s.Number] = s.EpisodeCount
+	}
+
 	// Find the target season in progress
 	var targetSeasonProgress *trakt.SeasonProgress
 	for i := range progress.Seasons {
@@ -261,8 +281,16 @@ func (s *Service) shouldRequestSeason(progress *trakt.ShowProgress, targetSeason
 
 	// If user has already watched any episodes of target season, it's already available
 	if targetSeasonProgress != nil && targetSeasonProgress.Completed > 0 {
-		return false, fmt.Sprintf("watching S%02d (%d/%d eps)",
-			targetSeason, targetSeasonProgress.Completed, targetSeasonProgress.Aired)
+		total := totalEps[targetSeason]
+		if total == 0 {
+			total = targetSeasonProgress.Aired // fallback to aired if no total
+		}
+		if targetSeasonProgress.Completed >= targetSeasonProgress.Aired {
+			return false, fmt.Sprintf("S%02d complete (%d/%d eps, %d aired)",
+				targetSeason, targetSeasonProgress.Completed, total, targetSeasonProgress.Aired)
+		}
+		return false, fmt.Sprintf("watching S%02d (%d/%d eps, %d aired)",
+			targetSeason, targetSeasonProgress.Completed, total, targetSeasonProgress.Aired)
 	}
 
 	// For season 1
@@ -303,8 +331,12 @@ func (s *Service) shouldRequestSeason(progress *trakt.ShowProgress, targetSeason
 	}
 
 	if prevSeasonProgress.Completed < prevSeasonProgress.Aired {
-		pct := float64(prevSeasonProgress.Completed) / float64(prevSeasonProgress.Aired) * 100
-		return false, fmt.Sprintf("S%02d incomplete (%.0f%%)", prevSeason, pct)
+		total := totalEps[prevSeason]
+		if total == 0 {
+			total = prevSeasonProgress.Aired
+		}
+		return false, fmt.Sprintf("S%02d incomplete (%d/%d eps, %d aired)",
+			prevSeason, prevSeasonProgress.Completed, total, prevSeasonProgress.Aired)
 	}
 
 	return true, fmt.Sprintf("S%02d complete", prevSeason)
