@@ -11,13 +11,14 @@ Automated media management service with two main features:
 
 - Monitors your Trakt "My Shows" calendar for upcoming episodes
 - Checks watch progress - only requests when previous season is 100% complete
-- Prevents duplicate requests by checking Overseerr status
-- Requests flow through Overseerr → Sonarr automatically
+- Prevents duplicate requests by checking Overseerr status (shows who already requested)
+- Supports requesting as a specific Overseerr user
+- Shows total vs aired episode counts for better visibility
 
 ### 🧹 Auto-Cleanup
 
 - Identifies fully watched series in Sonarr via Trakt
-- Only removes **ended** series (not continuing/airing shows)
+- Removes when all **on-disk episodes** are watched (works with continuing series too)
 - Configurable delay (default 3 days) before removal
 - Exclusion list for series you want to keep forever
 - Deletes files from disk when removing from Sonarr
@@ -34,6 +35,10 @@ Automated media management service with two main features:
 
 ### 2. Configure
 
+```bash
+cp config/config.example.yaml config/config.yaml
+```
+
 Edit `config/config.yaml`:
 
 ```yaml
@@ -48,24 +53,28 @@ trakt:
 overseerr:
   base_url: "http://localhost:5055"
   api_key: "your-api-key"
+  user_id: 0  # 0 = API key owner, or specific user ID
 
 sonarr:
   base_url: "http://localhost:8989"
   api_key: "your-api-key"
 
+# Shared scheduler settings (applies to both watcher and cleanup)
 scheduler:
-  cron: "0 */6 * * *"     # Every 6 hours
-  calendar_days: 14
-  dry_run: true           # Test first!
+  cron: "0 */6 * * *"  # Every 6 hours
+  dry_run: true        # Test first!
   run_on_start: true
 
-cleanup:
+# Watcher - auto-request new seasons
+watcher:
   enabled: true
-  delay_days: 3           # Wait 3 days after fully watched
-  dry_run: true           # Test first!
-  exclusions:             # Never delete these
-    - "Breaking Bad"
-    - "Game of Thrones"
+  calendar_days: 14
+
+# Cleanup - auto-remove fully watched series
+cleanup:
+  enabled: false
+  delay_days: 3
+  exclusions: []  # e.g. ["Breaking Bad", "The Office"]
 ```
 
 ### 3. Run
@@ -91,11 +100,11 @@ curl http://localhost:8080/api/v1/cleanup/queue
 
 ### 5. Deploy
 
-Once happy with dry-run results:
+Once happy with dry-run results, set `scheduler.dry_run: false` and deploy:
 
-1. Set `scheduler.dry_run: false`
-2. Set `cleanup.dry_run: false`
-3. Deploy: `docker compose up -d`
+```bash
+docker compose up -d
+```
 
 ## API Endpoints
 
@@ -122,21 +131,24 @@ trakt:
 overseerr:
   base_url: ""            # Required
   api_key: ""             # Required
+  user_id: 0              # Request as specific user (0 = API key owner)
 
 sonarr:
   base_url: ""            # Required for cleanup
   api_key: ""             # Required for cleanup
 
 scheduler:
-  cron: "0 */6 * * *"     # Cron schedule
-  calendar_days: 14       # Days ahead to check
-  dry_run: false          # Log only, no requests
-  run_on_start: true      # Run on startup
+  cron: "0 */6 * * *"     # Cron schedule (applies to both watcher and cleanup)
+  dry_run: false          # Log only, no actual requests/deletions
+  run_on_start: true      # Run immediately on startup
+
+watcher:
+  enabled: true           # Enable watcher feature
+  calendar_days: 14       # Days ahead to check for upcoming episodes
 
 cleanup:
   enabled: false          # Enable cleanup feature
-  delay_days: 3           # Days to wait after fully watched
-  dry_run: false          # Log only, no deletions
+  delay_days: 3           # Days to wait after fully watched before removing
   exclusions: []          # Series titles to never remove
 ```
 
@@ -148,6 +160,7 @@ Override any config with `FUSIONN_AIR_` prefix:
 FUSIONN_AIR_TRAKT_CLIENT_ID=xxx
 FUSIONN_AIR_OVERSEERR_API_KEY=xxx
 FUSIONN_AIR_SONARR_API_KEY=xxx
+FUSIONN_AIR_WATCHER_ENABLED=true
 FUSIONN_AIR_CLEANUP_ENABLED=true
 ```
 
@@ -182,10 +195,10 @@ docker run -d \
 └────────┬────────┘
          │ Yes
          ▼
-┌─────────────────┐     Yes     ┌──────────┐
-│ Already in      ├────────────►│  Skip    │
-│ Overseerr?      │             └──────────┘
-└────────┬────────┘
+┌─────────────────┐     Yes     ┌──────────────────┐
+│ Already in      ├────────────►│ Skip (shows who  │
+│ Overseerr?      │             │ requested it)    │
+└────────┬────────┘             └──────────────────┘
          │ No
          ▼
 ┌─────────────────┐
@@ -201,31 +214,28 @@ docker run -d \
 │  Sonarr Series  │
 └────────┬────────┘
          ▼
-┌─────────────────┐     No      ┌──────────┐
-│ Series ended?   ├────────────►│  Skip    │
-└────────┬────────┘             └──────────┘
-         │ Yes
-         ▼
-┌─────────────────┐     No      ┌──────────┐
-│ Fully watched   ├────────────►│  Skip    │
-│ on Trakt?       │             └──────────┘
+┌─────────────────┐     Yes     ┌──────────┐
+│ In exclusion    ├────────────►│  Skip    │
+│ list?           │             └──────────┘
 └────────┬────────┘
-         │ Yes
+         │ No
          ▼
 ┌─────────────────┐     No      ┌──────────┐
-│ In exclusion    ├────────────►│ Add to   │
-│ list?           │             │ queue    │
+│ All on-disk     ├────────────►│  Skip    │
+│ episodes watched│             │ (still   │
+│ on Trakt?       │             │ watching)│
 └────────┬────────┘             └──────────┘
          │ Yes
          ▼
 ┌─────────────────┐
-│     Skip        │
-└─────────────────┘
-
+│ Add to removal  │
+│ queue           │
+└────────┬────────┘
+         │
+         ▼
 ┌─────────────────┐
-│ Queue items     │
-│ older than      │────────────► Delete from Sonarr
-│ delay_days      │              (with files)
+│ After delay_days│────────────► Delete from Sonarr
+│ in queue        │              (with files)
 └─────────────────┘
 ```
 
@@ -236,3 +246,22 @@ docker run -d \
 - **Logging**: Zap
 - **Config**: Viper
 - **Scheduler**: robfig/cron
+
+## GitHub Actions
+
+This project includes CI/CD workflows:
+
+- **CI** (`ci.yml`) - Runs on push/PR: build, test, lint
+- **Release** (`release.yml`) - Runs on tag push (`v*`): builds and pushes Docker images to GHCR and Docker Hub
+
+### Release a new version
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+Images will be available at:
+
+- `ghcr.io/USERNAME/fusionn-air:v1.0.0`
+- `USERNAME/fusionn-air:v1.0.0` (Docker Hub)

@@ -1,0 +1,117 @@
+# ════════════════════════════════════════════════════════════════════════════
+# FUSIONN-AIR CONFIGURATION
+# ════════════════════════════════════════════════════════════════════════════
+# Copy this file to config.yaml and fill in your settings.
+#
+# Required setup:
+#   1. Create Trakt app at https://trakt.tv/oauth/applications
+#   2. Get Overseerr API key from Settings > General
+#   3. Get Sonarr API key from Settings > General (if using cleanup)
+#   4. Copy this file: cp config.example.yaml config.yaml
+#   5. Edit config.yaml with your values
+#   6. Start the service
+
+server:
+  port: 8080
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TRAKT (Required)
+# ─────────────────────────────────────────────────────────────────────────────
+# 1. Go to: https://trakt.tv/oauth/applications
+# 2. Create new app with:
+#    - Name: fusionn-air (or anything)
+#    - Redirect URI: urn:ietf:wg:oauth:2.0:oob
+# 3. Copy Client ID and Client Secret below
+#
+# On first run, you'll be prompted to authorize via browser.
+# Tokens are saved to data/trakt_tokens.json and auto-refreshed.
+trakt:
+  client_id: ""      # REQUIRED - from Trakt app settings
+  client_secret: ""  # REQUIRED - from Trakt app settings
+  base_url: "https://api.trakt.tv"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# OVERSEERR (Required for Watcher)
+# ─────────────────────────────────────────────────────────────────────────────
+# Get API key from: Overseerr > Settings > General
+#
+# user_id: Which user to make requests as
+#   - 0 = Use API key owner (default)
+#   - N = Specific user ID (find in Overseerr > Users > click user, ID is in URL)
+#
+# Note: To request as another user, you need an admin API key.
+overseerr:
+  base_url: "http://overseerr:5055"  # REQUIRED - adjust to your setup
+  api_key: ""                         # REQUIRED - from Overseerr settings
+  user_id: 0                          # Optional - request as specific user
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SONARR (Required for Cleanup)
+# ─────────────────────────────────────────────────────────────────────────────
+# Get API key from: Sonarr > Settings > General
+#
+# Only needed if cleanup.enabled is true.
+sonarr:
+  base_url: "http://sonarr:8989"  # REQUIRED for cleanup - adjust to your setup
+  api_key: ""                      # REQUIRED for cleanup - from Sonarr settings
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SCHEDULER (Shared settings for both Watcher and Cleanup)
+# ─────────────────────────────────────────────────────────────────────────────
+# Both watcher and cleanup run on the same schedule and share these settings.
+scheduler:
+  # Cron expression (standard 5-field format)
+  # Examples:
+  #   "0 */6 * * *"  = Every 6 hours
+  #   "0 0 * * *"    = Daily at midnight
+  #   "0 */2 * * *"  = Every 2 hours
+  cron: "0 */6 * * *"
+
+  # Dry run mode - logs what would happen without making changes
+  # RECOMMENDED: Start with true, check logs, then set to false
+  dry_run: true
+
+  # Run immediately when service starts (before waiting for cron)
+  run_on_start: true
+
+# ─────────────────────────────────────────────────────────────────────────────
+# WATCHER - Auto-request new seasons via Overseerr
+# ─────────────────────────────────────────────────────────────────────────────
+# Monitors your Trakt calendar and requests new seasons when:
+#   - Previous season is 100% watched
+#   - Season isn't already requested/available in Overseerr
+watcher:
+  # Enable/disable the watcher feature
+  enabled: true
+
+  # How many days ahead to check for upcoming episodes
+  # Trakt API max is 33 days
+  calendar_days: 14
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CLEANUP - Auto-remove fully watched series from Sonarr
+# ─────────────────────────────────────────────────────────────────────────────
+# Removes series from Sonarr (including files) when:
+#   - All episodes ON DISK have been watched on Trakt
+#   - Series has been in removal queue for delay_days
+#   - Series is not in exclusions list
+#
+# Note: Works with continuing series too - only checks episodes you have,
+# not future seasons.
+cleanup:
+  # Enable/disable the cleanup feature
+  enabled: false
+
+  # Days to wait after fully watched before removing
+  # Gives you time to rewatch or change your mind
+  delay_days: 3
+
+  # Series to NEVER remove (case-insensitive)
+  # Useful for shows you want to keep permanently
+  exclusions: []
+  # Example:
+  # exclusions:
+  #   - "Breaking Bad"
+  #   - "The Office"
+  #   - "Game of Thrones"
+

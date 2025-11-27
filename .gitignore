@@ -25,7 +25,8 @@ vendor/
 .DS_Store
 Thumbs.db
 
-# Config with secrets
+# Config with secrets (keep config.example.yaml tracked)
+config/config.yaml
 config/config.local.yaml
 config/*.local.yaml
 
