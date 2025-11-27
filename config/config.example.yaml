@@ -115,3 +115,24 @@ cleanup:
   #   - "The Office"
   #   - "Game of Thrones"
 
+# ─────────────────────────────────────────────────────────────────────────────
+# APPRISE - Notifications (Optional)
+# ─────────────────────────────────────────────────────────────────────────────
+# Send notifications via Apprise to Slack, Discord, Telegram, etc.
+#
+# Setup:
+#   1. Run Apprise container: docker run -d -p 8000:8000 caronc/apprise
+#   2. Configure your notification services in Apprise with tag "fusionn-air"
+#   3. Enable and set base_url below
+#
+# Setup Apprise:
+#   1. Access Apprise web UI (e.g., http://localhost:8000)
+#   2. Create a config with key "apprise" (or your preferred key)
+#   3. Add your notification URLs with tags (e.g., tag: fusionn-air)
+#   4. Set the key and tag below to match
+apprise:
+  enabled: false
+  base_url: "http://apprise:8000"  # Apprise API URL
+  key: "apprise"                   # Apprise config key (from web UI)
+  tag: "fusionn-air"               # Tag to filter services (default: all)
+

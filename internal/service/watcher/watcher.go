@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/fusionn-air/internal/client/apprise"
 	"github.com/fusionn-air/internal/client/overseerr"
 	"github.com/fusionn-air/internal/client/trakt"
 	"github.com/fusionn-air/internal/config"
@@ -17,6 +18,7 @@ import (
 type Service struct {
 	trakt     *trakt.Client
 	overseerr *overseerr.Client
+	apprise   *apprise.Client
 	cfg       config.WatcherConfig
 	dryRun    bool
 
@@ -37,10 +39,11 @@ type ProcessResult struct {
 	Error     string    `json:"error,omitempty"`
 }
 
-func NewService(traktClient *trakt.Client, overseerrClient *overseerr.Client, cfg config.WatcherConfig, dryRun bool) *Service {
+func NewService(traktClient *trakt.Client, overseerrClient *overseerr.Client, appriseClient *apprise.Client, cfg config.WatcherConfig, dryRun bool) *Service {
 	return &Service{
 		trakt:     traktClient,
 		overseerr: overseerrClient,
+		apprise:   appriseClient,
 		cfg:       cfg,
 		dryRun:    dryRun,
 	}
@@ -93,6 +96,9 @@ func (s *Service) ProcessCalendar(ctx context.Context) ([]ProcessResult, error) 
 
 	// Print summary
 	s.printSummary(results, startTime)
+
+	// Send notification
+	s.sendNotification(ctx, results)
 
 	return results, nil
 }
@@ -155,6 +161,60 @@ func (s *Service) printSummary(results []ProcessResult, startTime time.Time) {
 	logger.Info("────────────────────────────────────────────────────────────────")
 	logger.Infof("⏱️  Completed in %v", time.Since(startTime).Round(time.Millisecond))
 	logger.Info("")
+}
+
+// sendNotification sends a notification with watcher results
+func (s *Service) sendNotification(ctx context.Context, results []ProcessResult) {
+	if s.apprise == nil || !s.apprise.IsEnabled() {
+		return
+	}
+
+	// Count results
+	var requested, skipped, errCount int
+	for _, r := range results {
+		switch r.Action {
+		case "requested", "dry_run":
+			requested++
+		case "skipped", "already_requested":
+			skipped++
+		case "error":
+			errCount++
+		}
+	}
+
+	// Build notification
+	logger.Info("🔔 Sending notification...")
+	formatter := &apprise.SlackFormatter{}
+	var details []apprise.WatcherDetail
+	for _, r := range results {
+		details = append(details, apprise.WatcherDetail{
+			ShowTitle: r.ShowTitle,
+			Season:    r.Season,
+			Action:    r.Action,
+			Reason:    r.Reason,
+		})
+	}
+
+	title := "📺 Watcher Results"
+	if s.dryRun {
+		title = "📺 Watcher Results (DRY RUN)"
+	}
+
+	body := formatter.FormatWatcherResults(requested, skipped, errCount, details)
+
+	notifyType := "info"
+	if requested > 0 {
+		notifyType = "success"
+	}
+	if errCount > 0 {
+		notifyType = "warning"
+	}
+
+	if err := s.apprise.Notify(ctx, title, body, notifyType); err != nil {
+		logger.Warnf("🔔 Failed to send notification: %v", err)
+	} else {
+		logger.Info("🔔 Notification sent successfully")
+	}
 }
 
 type calendarItem struct {

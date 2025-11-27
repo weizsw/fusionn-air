@@ -11,6 +11,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/fusionn-air/internal/client/apprise"
 	"github.com/fusionn-air/internal/client/overseerr"
 	"github.com/fusionn-air/internal/client/sonarr"
 	"github.com/fusionn-air/internal/client/trakt"
@@ -62,6 +63,19 @@ func main() {
 	overseerrClient := overseerr.NewClient(cfg.Overseerr)
 	logger.Info("✅  Overseerr configured")
 
+	// Initialize Apprise client (notifications)
+	var appriseClient *apprise.Client
+	if cfg.Apprise.Enabled {
+		appriseClient = apprise.NewClient(cfg.Apprise)
+		tag := cfg.Apprise.Tag
+		if tag == "" {
+			tag = "all"
+		}
+		logger.Infof("🔔 Notifications: enabled (key=%s, tag=%s)", cfg.Apprise.Key, tag)
+	} else {
+		logger.Info("🔔 Notifications: disabled")
+	}
+
 	// Initialize Sonarr client (if cleanup enabled)
 	var sonarrClient *sonarr.Client
 	var cleanupService *cleanup.Service
@@ -71,7 +85,7 @@ func main() {
 		sonarrClient = sonarr.NewClient(cfg.Sonarr)
 		logger.Info("✅  Sonarr configured")
 
-		cleanupService = cleanup.NewService(sonarrClient, traktClient, cfg.Cleanup, cfg.Scheduler.DryRun)
+		cleanupService = cleanup.NewService(sonarrClient, traktClient, appriseClient, cfg.Cleanup, cfg.Scheduler.DryRun)
 		logger.Infof("🧹 Cleanup: enabled (delay=%d days)", cfg.Cleanup.DelayDays)
 	} else {
 		logger.Info("🧹 Cleanup: disabled")
@@ -80,7 +94,7 @@ func main() {
 	// Initialize watcher service
 	var watcherService *watcher.Service
 	if cfg.Watcher.Enabled {
-		watcherService = watcher.NewService(traktClient, overseerrClient, cfg.Watcher, cfg.Scheduler.DryRun)
+		watcherService = watcher.NewService(traktClient, overseerrClient, appriseClient, cfg.Watcher, cfg.Scheduler.DryRun)
 		logger.Infof("👁️  Watcher: enabled (calendar_days=%d)", cfg.Watcher.CalendarDays)
 	} else {
 		logger.Info("👁️  Watcher: disabled")
