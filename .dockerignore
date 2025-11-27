@@ -1,0 +1,32 @@
+# Git
+.git
+.gitignore
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+.cursor
+
+# Build artifacts
+bin/
+dist/
+fusionn
+*.exe
+
+# Docs
+*.md
+!README.md
+
+# Local config
+config/*.local.yaml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+Dockerfile
+docker-compose*.yaml
+

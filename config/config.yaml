@@ -1,0 +1,25 @@
+server:
+  port: 8080
+
+# Trakt API - https://trakt.tv/oauth/applications
+# Only client_id and client_secret are required
+# Tokens are managed automatically and saved to data/trakt_tokens.json
+trakt:
+  client_id: ""
+  client_secret: ""
+  base_url: "https://api.trakt.tv"
+
+# Overseerr API - Settings > General > API Key
+overseerr:
+  base_url: "http://localhost:5055"
+  api_key: ""
+
+scheduler:
+  # Cron expression for calendar check (default: every 6 hours)
+  cron: "0 */6 * * *"
+  # How many days ahead to check calendar
+  calendar_days: 14
+  # Dry run mode - logs what would be requested without actually requesting
+  dry_run: false
+  # Run immediately on startup (before waiting for cron schedule)
+  run_on_start: true
