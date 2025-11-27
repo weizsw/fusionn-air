@@ -145,14 +145,7 @@ func (s *Service) processSeries(ctx context.Context, ser *sonarr.Series, watched
 	// Check exclusions
 	if s.isExcluded(ser.Title) {
 		result.Action = "skipped"
-		result.Reason = "in exclusion list"
-		return result
-	}
-
-	// Check if series has ended
-	if !sonarr.IsSeriesEnded(ser) {
-		result.Action = "skipped"
-		result.Reason = fmt.Sprintf("still %s", ser.Status)
+		result.Reason = "in exclusion list - never remove"
 		return result
 	}
 
@@ -167,7 +160,7 @@ func (s *Service) processSeries(ctx context.Context, ser *sonarr.Series, watched
 	watched, found := watchedByTvdb[ser.TvdbID]
 	if !found {
 		result.Action = "skipped"
-		result.Reason = "not in Trakt history"
+		result.Reason = "no watch history in Trakt"
 		return result
 	}
 
@@ -175,19 +168,24 @@ func (s *Service) processSeries(ctx context.Context, ser *sonarr.Series, watched
 	progress, err := s.trakt.GetShowProgress(ctx, watched.Show.IDs.Trakt)
 	if err != nil {
 		result.Action = "error"
-		result.Reason = fmt.Sprintf("failed to get progress: %v", err)
+		result.Reason = fmt.Sprintf("failed to get Trakt progress: %v", err)
 		return result
 	}
 
-	// Check if fully watched
-	if progress.Completed < progress.Aired {
-		pct := float64(progress.Completed) / float64(progress.Aired) * 100
+	// Check if user has watched all episodes that are ON DISK in Sonarr
+	// (not all aired episodes, just what's in Sonarr)
+	watchedOnDisk, unwatchedSeasons := s.checkWatchedOnDisk(ser, progress)
+	if !watchedOnDisk {
 		result.Action = "skipped"
-		result.Reason = fmt.Sprintf("not fully watched (%d/%d = %.0f%%)", progress.Completed, progress.Aired, pct)
+		result.Reason = fmt.Sprintf("still watching - S%v not fully watched", formatSeasons(unwatchedSeasons))
 		return result
 	}
 
-	// Series is fully watched and ended!
+	// All episodes on disk are watched!
+	// Build reason with season info
+	seasonsOnDisk := getSeasonsWithFiles(ser)
+	watchedReason := fmt.Sprintf("all on-disk episodes watched (S%s)", formatSeasons(seasonsOnDisk))
+
 	// Check if already in queue
 	if s.queue.IsQueued(ser.ID) {
 		queueItem := s.queue.Get(ser.ID)
@@ -197,7 +195,7 @@ func (s *Service) processSeries(ctx context.Context, ser *sonarr.Series, watched
 			daysUntil = 0
 		}
 		result.Action = "queued"
-		result.Reason = fmt.Sprintf("in queue for %d days", daysInQueue)
+		result.Reason = watchedReason
 		result.DaysUntil = daysUntil
 		return result
 	}
@@ -208,14 +206,40 @@ func (s *Service) processSeries(ctx context.Context, ser *sonarr.Series, watched
 		TvdbID:     ser.TvdbID,
 		Title:      ser.Title,
 		MarkedAt:   time.Now(),
-		Reason:     "fully watched",
+		Reason:     watchedReason,
 		SizeOnDisk: ser.Statistics.SizeOnDisk,
 	})
 
 	result.Action = "queued"
-	result.Reason = "fully watched - added to removal queue"
+	result.Reason = watchedReason + " - added to queue"
 	result.DaysUntil = s.cfg.DelayDays
 	return result
+}
+
+// formatSeasons formats season numbers like "1,2,3" or "2"
+func formatSeasons(seasons []int) string {
+	if len(seasons) == 0 {
+		return ""
+	}
+	strs := make([]string, len(seasons))
+	for i, s := range seasons {
+		strs[i] = fmt.Sprintf("%02d", s)
+	}
+	return strings.Join(strs, ",")
+}
+
+// getSeasonsWithFiles returns season numbers that have files on disk
+func getSeasonsWithFiles(ser *sonarr.Series) []int {
+	var seasons []int
+	for _, s := range ser.Seasons {
+		if s.SeasonNumber == 0 {
+			continue
+		}
+		if s.Statistics != nil && s.Statistics.EpisodeFileCount > 0 {
+			seasons = append(seasons, s.SeasonNumber)
+		}
+	}
+	return seasons
 }
 
 func (s *Service) processRemovalQueue(ctx context.Context, result *ProcessingResult) {
@@ -290,6 +314,48 @@ func (s *Service) isExcluded(title string) bool {
 	return false
 }
 
+// checkWatchedOnDisk checks if user has watched all episodes that exist on disk in Sonarr
+// Returns (allWatched, unwatchedSeasonNumbers)
+func (s *Service) checkWatchedOnDisk(ser *sonarr.Series, progress *trakt.ShowProgress) (bool, []int) {
+	var unwatchedSeasons []int
+
+	// Build map of Trakt progress by season number
+	traktProgress := make(map[int]*trakt.SeasonProgress)
+	for i := range progress.Seasons {
+		traktProgress[progress.Seasons[i].Number] = &progress.Seasons[i]
+	}
+
+	// Check each season in Sonarr that has files
+	for _, season := range ser.Seasons {
+		// Skip specials (season 0) and seasons with no files
+		if season.SeasonNumber == 0 {
+			continue
+		}
+		if season.Statistics == nil || season.Statistics.EpisodeFileCount == 0 {
+			continue
+		}
+
+		// This season has files on disk - check if watched
+		traktSeason, found := traktProgress[season.SeasonNumber]
+		if !found {
+			// No watch progress for this season at all
+			unwatchedSeasons = append(unwatchedSeasons, season.SeasonNumber)
+			continue
+		}
+
+		// Check if user watched at least as many episodes as we have files
+		// (we can't know exactly which episodes are on disk, so we compare counts)
+		filesOnDisk := season.Statistics.EpisodeFileCount
+		watchedEpisodes := traktSeason.Completed
+
+		if watchedEpisodes < filesOnDisk {
+			unwatchedSeasons = append(unwatchedSeasons, season.SeasonNumber)
+		}
+	}
+
+	return len(unwatchedSeasons) == 0, unwatchedSeasons
+}
+
 func (s *Service) printSummary(result *ProcessingResult, startTime time.Time) {
 	var toRemove []string
 	var queued []string
@@ -297,24 +363,33 @@ func (s *Service) printSummary(result *ProcessingResult, startTime time.Time) {
 	var errors []string
 
 	for _, r := range result.Details {
-		info := fmt.Sprintf("   • %-35s  ← %s", r.Title, r.Reason)
 		switch r.Action {
 		case "removed", "dry_run_remove":
+			info := fmt.Sprintf("   ✅ %-35s", r.Title)
 			if r.SizeOnDisk != "" {
-				info = fmt.Sprintf("   ✓ %-35s  ← %s (%s)", r.Title, r.Reason, r.SizeOnDisk)
+				info += fmt.Sprintf(" [%s]", r.SizeOnDisk)
 			}
+			info += fmt.Sprintf("\n      └─ %s", r.Reason)
 			toRemove = append(toRemove, info)
 		case "queued":
+			info := fmt.Sprintf("   ⏳ %-35s", r.Title)
+			if r.SizeOnDisk != "" {
+				info += fmt.Sprintf(" [%s]", r.SizeOnDisk)
+			}
 			if r.DaysUntil > 0 {
-				info = fmt.Sprintf("   ⏳ %-35s  ← %s (removes in %d days)", r.Title, r.Reason, r.DaysUntil)
+				info += fmt.Sprintf("\n      └─ %s (removes in %d days)", r.Reason, r.DaysUntil)
 			} else {
-				info = fmt.Sprintf("   ⏳ %-35s  ← %s", r.Title, r.Reason)
+				info += fmt.Sprintf("\n      └─ %s (ready to remove)", r.Reason)
 			}
 			queued = append(queued, info)
 		case "skipped":
+			info := fmt.Sprintf("   ⏭️  %-35s", r.Title)
+			info += fmt.Sprintf("\n      └─ %s", r.Reason)
 			skipped = append(skipped, info)
 		case "error":
-			errors = append(errors, fmt.Sprintf("   ✗ %-35s  ← %s", r.Title, r.Reason))
+			info := fmt.Sprintf("   ❌ %-35s", r.Title)
+			info += fmt.Sprintf("\n      └─ %s", r.Reason)
+			errors = append(errors, info)
 		}
 	}
 
@@ -337,7 +412,7 @@ func (s *Service) printSummary(result *ProcessingResult, startTime time.Time) {
 
 	if len(queued) > 0 {
 		logger.Info("")
-		logger.Infof("⏳ IN REMOVAL QUEUE (%d):", len(queued))
+		logger.Infof("⏳ QUEUED FOR REMOVAL (%d):", len(queued))
 		for _, line := range queued {
 			logger.Info(line)
 		}
