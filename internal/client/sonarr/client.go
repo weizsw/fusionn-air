@@ -5,9 +5,10 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/go-resty/resty/v2"
+
 	"github.com/fusionn-air/internal/config"
 	"github.com/fusionn-air/pkg/logger"
-	"github.com/go-resty/resty/v2"
 )
 
 type Client struct {

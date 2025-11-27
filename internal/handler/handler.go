@@ -3,10 +3,11 @@ package handler
 import (
 	"net/http"
 
+	"github.com/gin-gonic/gin"
+
 	"github.com/fusionn-air/internal/scheduler"
 	"github.com/fusionn-air/internal/service/cleanup"
 	"github.com/fusionn-air/internal/service/watcher"
-	"github.com/gin-gonic/gin"
 )
 
 type Handler struct {

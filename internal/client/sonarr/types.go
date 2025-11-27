@@ -4,35 +4,35 @@ import "time"
 
 // Series represents a TV series in Sonarr
 type Series struct {
-	ID                int            `json:"id"`
-	Title             string         `json:"title"`
-	SortTitle         string         `json:"sortTitle"`
-	Status            string         `json:"status"` // "continuing", "ended", "upcoming"
-	Overview          string         `json:"overview"`
-	Network           string         `json:"network"`
-	Year              int            `json:"year"`
-	Path              string         `json:"path"`
-	TvdbID            int            `json:"tvdbId"`
-	TvMazeID          int            `json:"tvMazeId"`
-	ImdbID            string         `json:"imdbId"`
-	Monitored         bool           `json:"monitored"`
-	SeasonFolder      bool           `json:"seasonFolder"`
-	UseSceneNumbering bool           `json:"useSceneNumbering"`
-	Runtime           int            `json:"runtime"`
-	TvRageID          int            `json:"tvRageId"`
-	FirstAired        string         `json:"firstAired"`
-	SeriesType        string         `json:"seriesType"`
-	CleanTitle        string         `json:"cleanTitle"`
-	TitleSlug         string         `json:"titleSlug"`
-	Certification     string         `json:"certification"`
-	Genres            []string       `json:"genres"`
-	Tags              []int          `json:"tags"`
-	Added             time.Time      `json:"added"`
-	Ratings           Rating         `json:"ratings"`
-	Statistics        Statistics     `json:"statistics"`
-	Seasons           []Season       `json:"seasons"`
-	LanguageProfileID int            `json:"languageProfileId"`
-	QualityProfileID  int            `json:"qualityProfileId"`
+	ID                int        `json:"id"`
+	Title             string     `json:"title"`
+	SortTitle         string     `json:"sortTitle"`
+	Status            string     `json:"status"` // "continuing", "ended", "upcoming"
+	Overview          string     `json:"overview"`
+	Network           string     `json:"network"`
+	Year              int        `json:"year"`
+	Path              string     `json:"path"`
+	TvdbID            int        `json:"tvdbId"`
+	TvMazeID          int        `json:"tvMazeId"`
+	ImdbID            string     `json:"imdbId"`
+	Monitored         bool       `json:"monitored"`
+	SeasonFolder      bool       `json:"seasonFolder"`
+	UseSceneNumbering bool       `json:"useSceneNumbering"`
+	Runtime           int        `json:"runtime"`
+	TvRageID          int        `json:"tvRageId"`
+	FirstAired        string     `json:"firstAired"`
+	SeriesType        string     `json:"seriesType"`
+	CleanTitle        string     `json:"cleanTitle"`
+	TitleSlug         string     `json:"titleSlug"`
+	Certification     string     `json:"certification"`
+	Genres            []string   `json:"genres"`
+	Tags              []int      `json:"tags"`
+	Added             time.Time  `json:"added"`
+	Ratings           Rating     `json:"ratings"`
+	Statistics        Statistics `json:"statistics"`
+	Seasons           []Season   `json:"seasons"`
+	LanguageProfileID int        `json:"languageProfileId"`
+	QualityProfileID  int        `json:"qualityProfileId"`
 }
 
 type Rating struct {
@@ -50,8 +50,8 @@ type Statistics struct {
 }
 
 type Season struct {
-	SeasonNumber int              `json:"seasonNumber"`
-	Monitored    bool             `json:"monitored"`
+	SeasonNumber int               `json:"seasonNumber"`
+	Monitored    bool              `json:"monitored"`
 	Statistics   *SeasonStatistics `json:"statistics,omitempty"`
 }
 
@@ -83,7 +83,7 @@ type Episode struct {
 
 // DeleteOptions for removing a series
 type DeleteOptions struct {
-	DeleteFiles           bool `json:"deleteFiles"`
+	DeleteFiles            bool `json:"deleteFiles"`
 	AddImportListExclusion bool `json:"addImportListExclusion"`
 }
 
@@ -93,4 +93,3 @@ const (
 	StatusEnded      = "ended"
 	StatusUpcoming   = "upcoming"
 )
-

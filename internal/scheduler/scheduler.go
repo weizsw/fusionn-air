@@ -4,10 +4,11 @@ import (
 	"context"
 	"sync"
 
+	"github.com/robfig/cron/v3"
+
 	"github.com/fusionn-air/internal/service/cleanup"
 	"github.com/fusionn-air/internal/service/watcher"
 	"github.com/fusionn-air/pkg/logger"
-	"github.com/robfig/cron/v3"
 )
 
 type Scheduler struct {
