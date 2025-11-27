@@ -3,7 +3,6 @@ package scheduler
 import (
 	"context"
 	"sync"
-	"time"
 
 	"github.com/fusionn-air/internal/service/watcher"
 	"github.com/fusionn-air/pkg/logger"
@@ -31,19 +30,16 @@ func (s *Scheduler) Start(cronExpr string) error {
 	defer s.mu.Unlock()
 
 	if s.running {
-		logger.Warn("[scheduler] already running, skipping start")
 		return nil
 	}
 
 	// Convert standard cron (5 fields) to cron with seconds (6 fields)
-	// by prepending "0 " for 0 seconds
 	cronWithSeconds := "0 " + cronExpr
 
-	entryID, err := s.cron.AddFunc(cronWithSeconds, func() {
+	_, err := s.cron.AddFunc(cronWithSeconds, func() {
 		s.runJob()
 	})
 	if err != nil {
-		logger.Errorf("[scheduler] failed to add cron job: %v", err)
 		return err
 	}
 
@@ -51,11 +47,6 @@ func (s *Scheduler) Start(cronExpr string) error {
 	s.running = true
 	s.cronExpr = cronExpr
 
-	// Calculate next run time
-	entry := s.cron.Entry(entryID)
-	nextRun := entry.Next
-
-	logger.Infof("[scheduler] started with cron=%s next_run=%s", cronExpr, nextRun.Format(time.RFC3339))
 	return nil
 }
 
@@ -68,54 +59,21 @@ func (s *Scheduler) Stop() {
 		return
 	}
 
-	logger.Info("[scheduler] stopping...")
 	ctx := s.cron.Stop()
 	<-ctx.Done()
 	s.running = false
-
-	logger.Info("[scheduler] stopped")
 }
 
 // RunNow triggers an immediate run
 func (s *Scheduler) RunNow() {
-	logger.Info("[scheduler] manual trigger requested")
 	go s.runJob()
 }
 
 func (s *Scheduler) runJob() {
-	startTime := time.Now()
-	logger.Info("[scheduler] job starting...")
-
 	ctx := context.Background()
-	results, err := s.watcher.ProcessCalendar(ctx)
+	_, err := s.watcher.ProcessCalendar(ctx)
 	if err != nil {
-		logger.Errorf("[scheduler] job failed after %v: %v", time.Since(startTime), err)
-		return
-	}
-
-	requested := 0
-	dryRun := 0
-	skipped := 0
-	errors := 0
-	for _, r := range results {
-		switch r.Action {
-		case "requested":
-			requested++
-		case "dry_run":
-			dryRun++
-		case "skipped", "already_requested":
-			skipped++
-		case "error":
-			errors++
-		}
-	}
-
-	if dryRun > 0 {
-		logger.Warnf("[scheduler] job completed in %v: total=%d would_request=%d skipped=%d errors=%d (DRY RUN)",
-			time.Since(startTime), len(results), dryRun, skipped, errors)
-	} else {
-		logger.Infof("[scheduler] job completed in %v: total=%d requested=%d skipped=%d errors=%d",
-			time.Since(startTime), len(results), requested, skipped, errors)
+		logger.Errorf("❌ Scheduler job failed: %v", err)
 	}
 }
 

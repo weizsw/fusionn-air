@@ -72,17 +72,14 @@ func NewAuthManager(clientID, clientSecret, baseURL string) *AuthManager {
 func (a *AuthManager) Initialize(ctx context.Context) error {
 	// Try to load existing tokens
 	if err := a.loadTokens(); err == nil {
-		logger.Info("[trakt-auth] loaded existing tokens")
-
 		// Check if refresh needed
 		if a.needsRefresh() {
-			logger.Info("[trakt-auth] tokens need refresh...")
+			logger.Debug("Refreshing Trakt token...")
 			if err := a.refreshTokens(ctx); err != nil {
-				logger.Warnf("[trakt-auth] refresh failed, will need re-auth: %v", err)
+				logger.Warnf("Token refresh failed, need re-auth: %v", err)
 				return a.startDeviceAuth(ctx)
 			}
 		}
-
 		return nil
 	}
 
@@ -118,7 +115,6 @@ func (a *AuthManager) needsRefresh() bool {
 		return true
 	}
 
-	// Refresh if within 7 days of expiry
 	return time.Now().Add(tokenExpirySafe).After(a.tokens.ExpiresAt)
 }
 
@@ -151,7 +147,6 @@ func (a *AuthManager) saveTokens() error {
 		return fmt.Errorf("no tokens to save")
 	}
 
-	// Ensure directory exists
 	dir := filepath.Dir(tokenFile)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("creating data dir: %w", err)
@@ -162,19 +157,12 @@ func (a *AuthManager) saveTokens() error {
 		return err
 	}
 
-	if err := os.WriteFile(tokenFile, data, 0600); err != nil {
-		return err
-	}
-
-	logger.Debug("[trakt-auth] tokens saved to file")
-	return nil
+	return os.WriteFile(tokenFile, data, 0600)
 }
 
 // startDeviceAuth initiates the device authorization flow
 func (a *AuthManager) startDeviceAuth(ctx context.Context) error {
-	logger.Info("[trakt-auth] starting device authorization flow...")
-
-	// Step 1: Get device code
+	// Get device code
 	var deviceCode DeviceCodeResponse
 	resp, err := a.client.R().
 		SetContext(ctx).
@@ -190,17 +178,19 @@ func (a *AuthManager) startDeviceAuth(ctx context.Context) error {
 		return fmt.Errorf("device code error: %s", resp.String())
 	}
 
-	// Step 2: Show user instructions
-	logger.Info("[trakt-auth] ╔════════════════════════════════════════════════════════════╗")
-	logger.Info("[trakt-auth] ║              TRAKT AUTHORIZATION REQUIRED                  ║")
-	logger.Info("[trakt-auth] ╠════════════════════════════════════════════════════════════╣")
-	logger.Infof("[trakt-auth] ║  1. Go to: %-47s ║", deviceCode.VerificationURL)
-	logger.Infof("[trakt-auth] ║  2. Enter code: %-42s ║", deviceCode.UserCode)
-	logger.Info("[trakt-auth] ║  3. Click 'Authorize' on the Trakt website                 ║")
-	logger.Info("[trakt-auth] ╚════════════════════════════════════════════════════════════╝")
-	logger.Info("[trakt-auth] Waiting for authorization...")
+	// Show user instructions
+	logger.Info("")
+	logger.Info("┌──────────────────────────────────────────────────────────────┐")
+	logger.Info("│               TRAKT AUTHORIZATION REQUIRED                   │")
+	logger.Info("├──────────────────────────────────────────────────────────────┤")
+	logger.Infof("│  1. Go to: %-50s│", deviceCode.VerificationURL)
+	logger.Infof("│  2. Enter code: %-45s│", deviceCode.UserCode)
+	logger.Info("│  3. Click 'Authorize' on the Trakt website                   │")
+	logger.Info("└──────────────────────────────────────────────────────────────┘")
+	logger.Info("")
+	logger.Info("⏳ Waiting for authorization...")
 
-	// Step 3: Poll for token
+	// Poll for token
 	interval := time.Duration(deviceCode.Interval) * time.Second
 	if interval < time.Second {
 		interval = 5 * time.Second
@@ -220,7 +210,6 @@ func (a *AuthManager) startDeviceAuth(ctx context.Context) error {
 		}
 
 		if token != nil {
-			// Success!
 			a.mu.Lock()
 			a.tokens = &TokenStore{
 				AccessToken:  token.AccessToken,
@@ -230,12 +219,7 @@ func (a *AuthManager) startDeviceAuth(ctx context.Context) error {
 			}
 			a.mu.Unlock()
 
-			if err := a.saveTokens(); err != nil {
-				logger.Warnf("[trakt-auth] failed to save tokens: %v", err)
-			}
-
-			logger.Info("[trakt-auth] ✓ Authorization successful!")
-			logger.Infof("[trakt-auth] Token expires: %s", a.tokens.ExpiresAt.Format(time.RFC3339))
+			_ = a.saveTokens()
 			return nil
 		}
 
@@ -268,7 +252,6 @@ func (a *AuthManager) pollToken(ctx context.Context, deviceCode string) (*TokenR
 	case 200:
 		return &token, false, nil
 	case 400:
-		// Still pending
 		return nil, true, nil
 	case 404:
 		return nil, false, fmt.Errorf("invalid device code")
@@ -279,7 +262,6 @@ func (a *AuthManager) pollToken(ctx context.Context, deviceCode string) (*TokenR
 	case 418:
 		return nil, false, fmt.Errorf("user denied authorization")
 	case 429:
-		// Rate limited
 		return nil, true, nil
 	default:
 		return nil, false, fmt.Errorf("unexpected status: %d", resp.StatusCode())
@@ -321,12 +303,7 @@ func (a *AuthManager) refreshTokens(ctx context.Context) error {
 	}
 	a.mu.Unlock()
 
-	if err := a.saveTokens(); err != nil {
-		logger.Warnf("[trakt-auth] failed to save refreshed tokens: %v", err)
-	}
-
-	logger.Infof("[trakt-auth] ✓ Token refreshed, expires: %s", a.tokens.ExpiresAt.Format(time.RFC3339))
-	return nil
+	return a.saveTokens()
 }
 
 // EnsureValidToken checks and refreshes token if needed
@@ -336,4 +313,3 @@ func (a *AuthManager) EnsureValidToken(ctx context.Context) error {
 	}
 	return nil
 }
-

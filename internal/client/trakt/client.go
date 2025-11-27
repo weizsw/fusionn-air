@@ -28,24 +28,8 @@ func NewClient(cfg config.TraktConfig) *Client {
 		SetRetryMaxWaitTime(5 * time.Second).
 		AddRetryCondition(func(r *resty.Response, err error) bool {
 			return err != nil || r.StatusCode() >= 500
-		}).
-		OnBeforeRequest(func(c *resty.Client, r *resty.Request) error {
-			logger.Debugf("[trakt] --> %s %s", r.Method, r.URL)
-			return nil
-		}).
-		OnAfterResponse(func(c *resty.Client, r *resty.Response) error {
-			logger.Debugf("[trakt] <-- %s %s [%d] %v",
-				r.Request.Method, r.Request.URL, r.StatusCode(), r.Time())
-			if r.IsError() {
-				logger.Warnf("[trakt] error response: %s", r.String())
-			}
-			return nil
-		}).
-		OnError(func(r *resty.Request, err error) {
-			logger.Errorf("[trakt] request failed: %s %s error=%v", r.Method, r.URL, err)
 		})
 
-	// Create auth manager
 	auth := NewAuthManager(cfg.ClientID, cfg.ClientSecret, cfg.BaseURL)
 
 	return &Client{
@@ -61,7 +45,6 @@ func (c *Client) Initialize(ctx context.Context) error {
 		return fmt.Errorf("trakt auth: %w", err)
 	}
 
-	// Set auth token on client
 	c.client.SetAuthToken(c.auth.GetAccessToken())
 	return nil
 }
@@ -76,7 +59,6 @@ func (c *Client) ensureAuth(ctx context.Context) error {
 }
 
 // GetMyShowsCalendar returns upcoming episodes for shows the user has watched
-// days: number of days to look ahead (default 7, max 33)
 func (c *Client) GetMyShowsCalendar(ctx context.Context, days int) ([]CalendarShow, error) {
 	if err := c.ensureAuth(ctx); err != nil {
 		return nil, fmt.Errorf("auth: %w", err)
@@ -103,10 +85,9 @@ func (c *Client) GetMyShowsCalendar(ctx context.Context, days int) ([]CalendarSh
 	}
 
 	if resp.IsError() {
-		return nil, fmt.Errorf("API error: status=%d body=%s", resp.StatusCode(), resp.String())
+		return nil, fmt.Errorf("API error: status=%d", resp.StatusCode())
 	}
 
-	logger.Infof("[trakt] fetched %d upcoming episodes from calendar (days=%d)", len(shows), days)
 	return shows, nil
 }
 
@@ -129,10 +110,9 @@ func (c *Client) GetShowProgress(ctx context.Context, showID int) (*ShowProgress
 	}
 
 	if resp.IsError() {
-		return nil, fmt.Errorf("API error: status=%d body=%s", resp.StatusCode(), resp.String())
+		return nil, fmt.Errorf("API error: status=%d", resp.StatusCode())
 	}
 
-	logger.Debugf("[trakt] show %d progress: aired=%d completed=%d", showID, progress.Aired, progress.Completed)
 	return &progress, nil
 }
 
@@ -153,10 +133,10 @@ func (c *Client) GetWatchedShows(ctx context.Context) ([]WatchedShow, error) {
 	}
 
 	if resp.IsError() {
-		return nil, fmt.Errorf("API error: status=%d body=%s", resp.StatusCode(), resp.String())
+		return nil, fmt.Errorf("API error: status=%d", resp.StatusCode())
 	}
 
-	logger.Infof("[trakt] fetched %d watched shows", len(shows))
+	logger.Debugf("Fetched %d watched shows from Trakt", len(shows))
 	return shows, nil
 }
 
