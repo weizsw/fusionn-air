@@ -9,6 +9,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/gin-gonic/gin"
+
 	"github.com/fusionn-air/internal/client/overseerr"
 	"github.com/fusionn-air/internal/client/sonarr"
 	"github.com/fusionn-air/internal/client/trakt"
@@ -19,7 +21,6 @@ import (
 	"github.com/fusionn-air/internal/service/watcher"
 	"github.com/fusionn-air/internal/version"
 	"github.com/fusionn-air/pkg/logger"
-	"github.com/gin-gonic/gin"
 )
 
 func main() {

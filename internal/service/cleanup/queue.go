@@ -124,7 +124,7 @@ func (q *Queue) load() error {
 // save writes the queue to disk
 func (q *Queue) save() error {
 	dir := filepath.Dir(queueFile)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
 
@@ -138,7 +138,7 @@ func (q *Queue) save() error {
 		return err
 	}
 
-	return os.WriteFile(queueFile, data, 0600)
+	return os.WriteFile(queueFile, data, 0o600)
 }
 
 // Clear removes all items from the queue
@@ -149,4 +149,3 @@ func (q *Queue) Clear() {
 	q.items = make(map[int]*QueueItem)
 	_ = q.save()
 }
-

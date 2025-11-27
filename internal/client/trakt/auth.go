@@ -9,8 +9,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/fusionn-air/pkg/logger"
 	"github.com/go-resty/resty/v2"
+
+	"github.com/fusionn-air/pkg/logger"
 )
 
 const (
@@ -60,7 +61,7 @@ type AuthManager struct {
 func NewAuthManager(clientID, clientSecret, baseURL string) *AuthManager {
 	return &AuthManager{
 		client: resty.New().
-			SetTimeout(30 * time.Second).
+			SetTimeout(30*time.Second).
 			SetHeader("Content-Type", "application/json"),
 		clientID:     clientID,
 		clientSecret: clientSecret,
@@ -148,7 +149,7 @@ func (a *AuthManager) saveTokens() error {
 	}
 
 	dir := filepath.Dir(tokenFile)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("creating data dir: %w", err)
 	}
 
@@ -157,7 +158,7 @@ func (a *AuthManager) saveTokens() error {
 		return err
 	}
 
-	return os.WriteFile(tokenFile, data, 0600)
+	return os.WriteFile(tokenFile, data, 0o600)
 }
 
 // startDeviceAuth initiates the device authorization flow

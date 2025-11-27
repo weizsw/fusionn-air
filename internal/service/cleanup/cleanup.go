@@ -305,9 +305,8 @@ func (s *Service) processRemovalQueue(ctx context.Context, result *ProcessingRes
 }
 
 func (s *Service) isExcluded(title string) bool {
-	titleLower := strings.ToLower(title)
 	for _, exc := range s.cfg.Exclusions {
-		if strings.ToLower(exc) == titleLower {
+		if strings.EqualFold(exc, title) {
 			return true
 		}
 	}
@@ -458,4 +457,3 @@ func (s *Service) GetLastRun() time.Time {
 	defer s.mu.RUnlock()
 	return s.lastRun
 }
-
