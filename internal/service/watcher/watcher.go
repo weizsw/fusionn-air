@@ -107,11 +107,11 @@ func (s *Service) printSummary(results []ProcessResult, startTime time.Time) {
 		showInfo := fmt.Sprintf("%s S%02d", r.ShowTitle, r.Season)
 		switch r.Action {
 		case "requested", "dry_run":
-			willRequest = append(willRequest, fmt.Sprintf("   ✓ %-35s  ← %s", showInfo, r.Reason))
+			willRequest = append(willRequest, fmt.Sprintf("   ✅ %-35s  ← %s", showInfo, r.Reason))
 		case "skipped", "already_requested":
-			willSkip = append(willSkip, fmt.Sprintf("   • %-35s  ← %s", showInfo, r.Reason))
+			willSkip = append(willSkip, fmt.Sprintf("   ⏭️  %-35s  ← %s", showInfo, r.Reason))
 		case "error":
-			errors = append(errors, fmt.Sprintf("   ✗ %-35s  ← %s", showInfo, r.Error))
+			errors = append(errors, fmt.Sprintf("   ❌ %-35s  ← %s", showInfo, r.Error))
 		}
 	}
 

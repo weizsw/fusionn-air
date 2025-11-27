@@ -149,10 +149,22 @@ func (s *Service) processSeries(ctx context.Context, ser *sonarr.Series, watched
 		return result
 	}
 
+	// Check if series is monitored
+	if !ser.Monitored {
+		result.Action = "skipped"
+		result.Reason = "not monitored in Sonarr"
+		return result
+	}
+
 	// Check if series has any files
 	if ser.Statistics.EpisodeFileCount == 0 {
 		result.Action = "skipped"
-		result.Reason = "no files on disk"
+		// Check if series hasn't aired yet
+		if ser.Status == sonarr.StatusUpcoming || ser.Statistics.EpisodeCount == 0 {
+			result.Reason = "not yet aired"
+		} else {
+			result.Reason = "no files on disk"
+		}
 		return result
 	}
 
@@ -180,14 +192,21 @@ func (s *Service) processSeries(ctx context.Context, ser *sonarr.Series, watched
 	watchedOnDisk, unwatchedSeasons := s.checkWatchedOnDisk(ser, progress)
 	if !watchedOnDisk {
 		result.Action = "skipped"
-		result.Reason = fmt.Sprintf("still watching - S%v not fully watched", formatSeasons(unwatchedSeasons))
+		result.Reason = buildWatchingReason(progress, seasons, unwatchedSeasons)
 		return result
 	}
 
 	// All episodes on disk are watched, but check if more episodes are coming
-	if progress.NextEpisode != nil {
+	// Check both NextEpisode AND if any season has more episodes to air
+	moreEpisodesComing, ongoingReason := checkMoreEpisodesComing(ser, progress, seasons)
+	if moreEpisodesComing {
+		// Remove from queue if it was previously queued (show is ongoing)
+		if s.queue.IsQueued(ser.ID) {
+			s.queue.Remove(ser.ID)
+			logger.Debugf("Removed %s from queue - more episodes coming", ser.Title)
+		}
 		result.Action = "skipped"
-		result.Reason = buildAwaitingReason(progress, seasons)
+		result.Reason = ongoingReason
 		return result
 	}
 
@@ -224,6 +243,96 @@ func (s *Service) processSeries(ctx context.Context, ser *sonarr.Series, watched
 	result.Reason = watchedReason + " - added to queue"
 	result.DaysUntil = s.cfg.DelayDays
 	return result
+}
+
+// checkMoreEpisodesComing checks if any season with files has more episodes to air
+func checkMoreEpisodesComing(ser *sonarr.Series, progress *trakt.ShowProgress, seasons []trakt.SeasonSummary) (bool, string) {
+	// Build map of total episode counts per season
+	totalEps := make(map[int]int)
+	for _, s := range seasons {
+		totalEps[s.Number] = s.EpisodeCount
+	}
+
+	// Build map of season progress
+	progressMap := make(map[int]*trakt.SeasonProgress)
+	for i := range progress.Seasons {
+		progressMap[progress.Seasons[i].Number] = &progress.Seasons[i]
+	}
+
+	// Check each season that has files on disk
+	for _, season := range ser.Seasons {
+		if season.SeasonNumber == 0 {
+			continue
+		}
+		if season.Statistics == nil || season.Statistics.EpisodeFileCount == 0 {
+			continue
+		}
+
+		// This season has files - check if more episodes are coming
+		total := totalEps[season.SeasonNumber]
+		sp := progressMap[season.SeasonNumber]
+
+		if sp != nil && total > 0 && sp.Aired < total {
+			// More episodes to air in this season
+			return true, fmt.Sprintf("S%02d ongoing (%d/%d eps, %d aired)",
+				season.SeasonNumber, sp.Completed, total, sp.Aired)
+		}
+	}
+
+	// Also check NextEpisode as fallback
+	if progress.NextEpisode != nil {
+		seasonNum := progress.NextEpisode.Season
+		sp := progressMap[seasonNum]
+		total := totalEps[seasonNum]
+		if sp != nil {
+			if total == 0 {
+				total = sp.Aired
+			}
+			return true, fmt.Sprintf("S%02d ongoing (%d/%d eps, %d aired)",
+				seasonNum, sp.Completed, total, sp.Aired)
+		}
+		return true, fmt.Sprintf("S%02d ongoing", seasonNum)
+	}
+
+	return false, ""
+}
+
+// buildWatchingReason builds the skip reason when user is still watching
+func buildWatchingReason(progress *trakt.ShowProgress, seasons []trakt.SeasonSummary, unwatchedSeasons []int) string {
+	if len(unwatchedSeasons) == 0 {
+		return "still watching"
+	}
+
+	// Use the first unwatched season for the message
+	seasonNum := unwatchedSeasons[0]
+
+	// Find season progress
+	var seasonProgress *trakt.SeasonProgress
+	for i := range progress.Seasons {
+		if progress.Seasons[i].Number == seasonNum {
+			seasonProgress = &progress.Seasons[i]
+			break
+		}
+	}
+
+	// Find total episode count from seasons
+	total := 0
+	for _, s := range seasons {
+		if s.Number == seasonNum {
+			total = s.EpisodeCount
+			break
+		}
+	}
+
+	if seasonProgress != nil {
+		if total == 0 {
+			total = seasonProgress.Aired // fallback
+		}
+		return fmt.Sprintf("watching S%02d (%d/%d eps, %d aired)",
+			seasonNum, seasonProgress.Completed, total, seasonProgress.Aired)
+	}
+
+	return fmt.Sprintf("S%02d not watched", seasonNum)
 }
 
 // buildAwaitingReason builds the skip reason when more episodes are coming
@@ -326,7 +435,7 @@ func (s *Service) processRemovalQueue(ctx context.Context, result *ProcessingRes
 				}
 				continue
 			}
-			logger.Infof("✓  Deleted: %s (%s freed)", item.Title, sonarr.FormatSize(item.SizeOnDisk))
+			logger.Infof("✅ Deleted: %s (%s freed)", item.Title, sonarr.FormatSize(item.SizeOnDisk))
 		}
 
 		// Remove from queue
@@ -412,7 +521,7 @@ func (s *Service) printSummary(result *ProcessingResult, startTime time.Time) {
 			if r.SizeOnDisk != "" {
 				info += fmt.Sprintf(" [%s]", r.SizeOnDisk)
 			}
-			info += fmt.Sprintf("\n      └─ %s", r.Reason)
+			info += fmt.Sprintf("  ← %s", r.Reason)
 			toRemove = append(toRemove, info)
 		case "queued":
 			info := fmt.Sprintf("   ⏳ %-35s", r.Title)
@@ -420,18 +529,18 @@ func (s *Service) printSummary(result *ProcessingResult, startTime time.Time) {
 				info += fmt.Sprintf(" [%s]", r.SizeOnDisk)
 			}
 			if r.DaysUntil > 0 {
-				info += fmt.Sprintf("\n      └─ %s (removes in %d days)", r.Reason, r.DaysUntil)
+				info += fmt.Sprintf("  ← %s (removes in %d days)", r.Reason, r.DaysUntil)
 			} else {
-				info += fmt.Sprintf("\n      └─ %s (ready to remove)", r.Reason)
+				info += fmt.Sprintf("  ← %s (ready to remove)", r.Reason)
 			}
 			queued = append(queued, info)
 		case "skipped":
 			info := fmt.Sprintf("   ⏭️  %-35s", r.Title)
-			info += fmt.Sprintf("\n      └─ %s", r.Reason)
+			info += fmt.Sprintf("  ← %s", r.Reason)
 			skipped = append(skipped, info)
 		case "error":
 			info := fmt.Sprintf("   ❌ %-35s", r.Title)
-			info += fmt.Sprintf("\n      └─ %s", r.Reason)
+			info += fmt.Sprintf("  ← %s", r.Reason)
 			errors = append(errors, info)
 		}
 	}
