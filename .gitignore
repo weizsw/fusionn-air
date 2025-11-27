@@ -1,5 +1,5 @@
 # Binaries
-fusionn-air
+/fusionn-air
 *.exe
 *.exe~
 *.dll

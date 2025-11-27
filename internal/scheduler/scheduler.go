@@ -4,23 +4,25 @@ import (
 	"context"
 	"sync"
 
+	"github.com/fusionn-air/internal/service/cleanup"
 	"github.com/fusionn-air/internal/service/watcher"
 	"github.com/fusionn-air/pkg/logger"
 	"github.com/robfig/cron/v3"
 )
 
 type Scheduler struct {
-	cron     *cron.Cron
-	watcher  *watcher.Service
-	cronExpr string
-	mu       sync.Mutex
-	running  bool
+	cron    *cron.Cron
+	watcher *watcher.Service
+	cleanup *cleanup.Service
+	mu      sync.Mutex
+	running bool
 }
 
-func New(watcherService *watcher.Service) *Scheduler {
+func New(watcherService *watcher.Service, cleanupService *cleanup.Service) *Scheduler {
 	return &Scheduler{
 		cron:    cron.New(cron.WithSeconds()),
 		watcher: watcherService,
+		cleanup: cleanupService,
 	}
 }
 
@@ -45,7 +47,8 @@ func (s *Scheduler) Start(cronExpr string) error {
 
 	s.cron.Start()
 	s.running = true
-	s.cronExpr = cronExpr
+
+	logger.Infof("⏰ Scheduler: %s", cronExpr)
 
 	return nil
 }
@@ -64,16 +67,45 @@ func (s *Scheduler) Stop() {
 	s.running = false
 }
 
-// RunNow triggers an immediate run
+// RunNow triggers both watcher and cleanup immediately
 func (s *Scheduler) RunNow() {
 	go s.runJob()
 }
 
+// RunWatcherNow triggers only the watcher job
+func (s *Scheduler) RunWatcherNow() {
+	go s.runWatcher()
+}
+
+// RunCleanupNow triggers only the cleanup job
+func (s *Scheduler) RunCleanupNow() {
+	go s.runCleanup()
+}
+
 func (s *Scheduler) runJob() {
+	s.runWatcher()
+	s.runCleanup()
+}
+
+func (s *Scheduler) runWatcher() {
+	if s.watcher == nil {
+		return
+	}
 	ctx := context.Background()
 	_, err := s.watcher.ProcessCalendar(ctx)
 	if err != nil {
-		logger.Errorf("❌ Scheduler job failed: %v", err)
+		logger.Errorf("❌ Watcher job failed: %v", err)
+	}
+}
+
+func (s *Scheduler) runCleanup() {
+	if s.cleanup == nil {
+		return
+	}
+	ctx := context.Background()
+	_, err := s.cleanup.ProcessCleanup(ctx)
+	if err != nil {
+		logger.Errorf("❌ Cleanup job failed: %v", err)
 	}
 }
 

@@ -10,7 +10,7 @@ COPY . .
 ARG VERSION=dev
 RUN CGO_ENABLED=0 GOOS=linux go build \
     -ldflags="-s -w -X github.com/fusionn-air/internal/version.Version=${VERSION}" \
-    -o fusionn-air ./cmd/fusionn
+    -o fusionn-air ./cmd/fusionn-air
 
 FROM alpine:3.19
 

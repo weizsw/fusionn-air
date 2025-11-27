@@ -1,15 +1,26 @@
 # Fusionn-Air
 
-Automated media request service that watches your Trakt calendar and requests new seasons via Overseerr when you've completed watching previous seasons.
+Automated media management service with two main features:
 
-## How It Works
+1. **Auto-Request** - Monitors Trakt calendar and requests new seasons via Overseerr when you've completed watching previous seasons
+2. **Auto-Cleanup** - Removes fully watched series from Sonarr after a configurable delay
 
-1. **Monitors Trakt Calendar** - Periodically checks your "My Shows" calendar for upcoming episodes
-2. **Checks Watch Progress** - For each upcoming show, verifies your watch progress via Trakt
-3. **Smart Requesting** - Only requests new seasons when:
-   - Previous season is 100% complete
-   - Season isn't already requested/available in Overseerr
-4. **Auto-Request via Overseerr** - Creates requests that flow to Sonarr automatically
+## Features
+
+### 🎬 Auto-Request (Watcher)
+
+- Monitors your Trakt "My Shows" calendar for upcoming episodes
+- Checks watch progress - only requests when previous season is 100% complete
+- Prevents duplicate requests by checking Overseerr status
+- Requests flow through Overseerr → Sonarr automatically
+
+### 🧹 Auto-Cleanup
+
+- Identifies fully watched series in Sonarr via Trakt
+- Only removes **ended** series (not continuing/airing shows)
+- Configurable delay (default 3 days) before removal
+- Exclusion list for series you want to keep forever
+- Deletes files from disk when removing from Sonarr
 
 ## Quick Start
 
@@ -17,7 +28,7 @@ Automated media request service that watches your Trakt calendar and requests ne
 
 1. Go to <https://trakt.tv/oauth/applications>
 2. Create a new application:
-   - **Name**: `fusionn-air` (or anything)
+   - **Name**: `fusionn-air`
    - **Redirect URI**: `urn:ietf:wg:oauth:2.0:oob`
 3. Copy your **Client ID** and **Client Secret**
 
@@ -30,59 +41,74 @@ server:
   port: 8080
 
 trakt:
-  client_id: "your-client-id"      # From step 1
+  client_id: "your-client-id"
   client_secret: "your-client-secret"
   base_url: "https://api.trakt.tv"
 
 overseerr:
   base_url: "http://localhost:5055"
-  api_key: "your-api-key"          # Overseerr > Settings > General
+  api_key: "your-api-key"
+
+sonarr:
+  base_url: "http://localhost:8989"
+  api_key: "your-api-key"
 
 scheduler:
-  cron: "0 */6 * * *"   # Every 6 hours
-  calendar_days: 14      # Look 14 days ahead
-  dry_run: true          # Start with true to test!
+  cron: "0 */6 * * *"     # Every 6 hours
+  calendar_days: 14
+  dry_run: true           # Test first!
+  run_on_start: true
+
+cleanup:
+  enabled: true
+  delay_days: 3           # Wait 3 days after fully watched
+  dry_run: true           # Test first!
+  exclusions:             # Never delete these
+    - "Breaking Bad"
+    - "Game of Thrones"
 ```
 
 ### 3. Run
 
 ```bash
-go run ./cmd/fusionn
+go run ./cmd/fusionn-air
 ```
 
-On first run, you'll see:
-
-```
-[trakt-auth] ╔════════════════════════════════════════════════════════════╗
-[trakt-auth] ║              TRAKT AUTHORIZATION REQUIRED                  ║
-[trakt-auth] ╠════════════════════════════════════════════════════════════╣
-[trakt-auth] ║  1. Go to: https://trakt.tv/activate                       ║
-[trakt-auth] ║  2. Enter code: A1B2C3D4                                   ║
-[trakt-auth] ║  3. Click 'Authorize' on the Trakt website                 ║
-[trakt-auth] ╚════════════════════════════════════════════════════════════╝
-```
-
-Just follow the instructions - tokens are saved automatically to `data/trakt_tokens.json` and auto-refreshed.
+On first run, follow the Trakt authorization prompts.
 
 ### 4. Test
 
 ```bash
-# Trigger a manual run
-curl -X POST http://localhost:8080/api/v1/process
+# Trigger watcher (new season requests)
+curl -X POST http://localhost:8080/api/v1/watcher/run
 
-# Check stats
-curl http://localhost:8080/api/v1/stats
+# Trigger cleanup (remove watched series)
+curl -X POST http://localhost:8080/api/v1/cleanup/run
+
+# Check cleanup queue
+curl http://localhost:8080/api/v1/cleanup/queue
 ```
 
 ### 5. Deploy
 
-Once happy with dry-run results, set `dry_run: false` and deploy:
+Once happy with dry-run results:
 
-```bash
-docker compose up -d
-```
+1. Set `scheduler.dry_run: false`
+2. Set `cleanup.dry_run: false`
+3. Deploy: `docker compose up -d`
 
-## Configuration
+## API Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/v1/health` | Health check |
+| GET | `/api/v1/watcher/stats` | Watcher statistics |
+| POST | `/api/v1/watcher/run` | Trigger watcher manually |
+| GET | `/api/v1/cleanup/stats` | Cleanup statistics |
+| GET | `/api/v1/cleanup/queue` | View removal queue |
+| POST | `/api/v1/cleanup/run` | Trigger cleanup manually |
+
+## Configuration Reference
 
 ```yaml
 server:
@@ -94,14 +120,24 @@ trakt:
   base_url: "https://api.trakt.tv"
 
 overseerr:
-  base_url: ""            # Required - e.g. http://localhost:5055
-  api_key: ""             # Required - from Overseerr settings
+  base_url: ""            # Required
+  api_key: ""             # Required
+
+sonarr:
+  base_url: ""            # Required for cleanup
+  api_key: ""             # Required for cleanup
 
 scheduler:
-  cron: "0 */6 * * *"     # Cron schedule (every 6 hours)
+  cron: "0 */6 * * *"     # Cron schedule
   calendar_days: 14       # Days ahead to check
-  dry_run: false          # True = log only, no actual requests
-  run_on_start: true      # Run immediately on startup
+  dry_run: false          # Log only, no requests
+  run_on_start: true      # Run on startup
+
+cleanup:
+  enabled: false          # Enable cleanup feature
+  delay_days: 3           # Days to wait after fully watched
+  dry_run: false          # Log only, no deletions
+  exclusions: []          # Series titles to never remove
 ```
 
 ### Environment Variables
@@ -111,16 +147,9 @@ Override any config with `FUSIONN_AIR_` prefix:
 ```bash
 FUSIONN_AIR_TRAKT_CLIENT_ID=xxx
 FUSIONN_AIR_OVERSEERR_API_KEY=xxx
-FUSIONN_AIR_SCHEDULER_DRY_RUN=true
+FUSIONN_AIR_SONARR_API_KEY=xxx
+FUSIONN_AIR_CLEANUP_ENABLED=true
 ```
-
-## API Endpoints
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/v1/health` | Health check |
-| GET | `/api/v1/stats` | Processing statistics |
-| POST | `/api/v1/process` | Manually trigger processing |
 
 ## Docker
 
@@ -138,31 +167,14 @@ docker run -d \
   fusionn-air
 ```
 
-## Development
+## Logic Flows
 
-```bash
-# Run locally (dev mode = verbose logging)
-ENV=development go run ./cmd/fusionn
-
-# Build binary
-go build -o fusionn-air ./cmd/fusionn
-```
-
-## Logic Flow
+### Watcher (Auto-Request)
 
 ```
 ┌─────────────────┐
 │  Trakt Calendar │
-│  (My Shows)     │
 └────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│ For each show   │
-│ with upcoming   │
-│ episode/season  │
-└────────┬────────┘
-         │
          ▼
 ┌─────────────────┐     No      ┌──────────┐
 │ Previous season ├────────────►│  Skip    │
@@ -179,6 +191,41 @@ go build -o fusionn-air ./cmd/fusionn
 ┌─────────────────┐
 │ Request season  │
 │ via Overseerr   │
+└─────────────────┘
+```
+
+### Cleanup (Auto-Remove)
+
+```
+┌─────────────────┐
+│  Sonarr Series  │
+└────────┬────────┘
+         ▼
+┌─────────────────┐     No      ┌──────────┐
+│ Series ended?   ├────────────►│  Skip    │
+└────────┬────────┘             └──────────┘
+         │ Yes
+         ▼
+┌─────────────────┐     No      ┌──────────┐
+│ Fully watched   ├────────────►│  Skip    │
+│ on Trakt?       │             └──────────┘
+└────────┬────────┘
+         │ Yes
+         ▼
+┌─────────────────┐     No      ┌──────────┐
+│ In exclusion    ├────────────►│ Add to   │
+│ list?           │             │ queue    │
+└────────┬────────┘             └──────────┘
+         │ Yes
+         ▼
+┌─────────────────┐
+│     Skip        │
+└─────────────────┘
+
+┌─────────────────┐
+│ Queue items     │
+│ older than      │────────────► Delete from Sonarr
+│ delay_days      │              (with files)
 └─────────────────┘
 ```
 

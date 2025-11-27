@@ -10,7 +10,10 @@ type Config struct {
 	Server    ServerConfig    `mapstructure:"server"`
 	Trakt     TraktConfig     `mapstructure:"trakt"`
 	Overseerr OverseerrConfig `mapstructure:"overseerr"`
+	Sonarr    SonarrConfig    `mapstructure:"sonarr"`
 	Scheduler SchedulerConfig `mapstructure:"scheduler"`
+	Watcher   WatcherConfig   `mapstructure:"watcher"`
+	Cleanup   CleanupConfig   `mapstructure:"cleanup"`
 }
 
 type ServerConfig struct {
@@ -26,13 +29,29 @@ type TraktConfig struct {
 type OverseerrConfig struct {
 	BaseURL string `mapstructure:"base_url"`
 	APIKey  string `mapstructure:"api_key"`
+	UserID  int    `mapstructure:"user_id"` // Request as specific user (0 = API key owner)
+}
+
+type SonarrConfig struct {
+	BaseURL string `mapstructure:"base_url"`
+	APIKey  string `mapstructure:"api_key"`
 }
 
 type SchedulerConfig struct {
-	Cron         string `mapstructure:"cron"`
-	CalendarDays int    `mapstructure:"calendar_days"`
-	DryRun       bool   `mapstructure:"dry_run"`
-	RunOnStart   bool   `mapstructure:"run_on_start"`
+	Cron       string `mapstructure:"cron"`
+	DryRun     bool   `mapstructure:"dry_run"`
+	RunOnStart bool   `mapstructure:"run_on_start"`
+}
+
+type WatcherConfig struct {
+	Enabled      bool `mapstructure:"enabled"`
+	CalendarDays int  `mapstructure:"calendar_days"` // Days ahead to check for new episodes
+}
+
+type CleanupConfig struct {
+	Enabled    bool     `mapstructure:"enabled"`
+	DelayDays  int      `mapstructure:"delay_days"` // Days to wait after fully watched
+	Exclusions []string `mapstructure:"exclusions"` // Series titles to never remove
 }
 
 func Load(path string) (*Config, error) {

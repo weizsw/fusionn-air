@@ -13,6 +13,7 @@ import (
 
 type Client struct {
 	client *resty.Client
+	userID int
 }
 
 func NewClient(cfg config.OverseerrConfig) *Client {
@@ -28,7 +29,10 @@ func NewClient(cfg config.OverseerrConfig) *Client {
 			return err != nil || r.StatusCode() >= 500
 		})
 
-	return &Client{client: client}
+	return &Client{
+		client: client,
+		userID: cfg.UserID,
+	}
 }
 
 // SearchTV searches for a TV show by name
@@ -76,6 +80,7 @@ func (c *Client) RequestTV(ctx context.Context, tmdbID int, seasons []int) (*Req
 		MediaType: string(MediaTypeTV),
 		MediaID:   tmdbID,
 		Seasons:   seasons,
+		UserID:    c.userID,
 	}
 
 	var result RequestResponse
