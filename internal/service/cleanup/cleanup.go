@@ -172,6 +172,9 @@ func (s *Service) processSeries(ctx context.Context, ser *sonarr.Series, watched
 		return result
 	}
 
+	// Get season info for total episode counts
+	seasons, _ := s.trakt.GetShowSeasons(ctx, watched.Show.IDs.Trakt)
+
 	// Check if user has watched all episodes that are ON DISK in Sonarr
 	// (not all aired episodes, just what's in Sonarr)
 	watchedOnDisk, unwatchedSeasons := s.checkWatchedOnDisk(ser, progress)
@@ -181,7 +184,14 @@ func (s *Service) processSeries(ctx context.Context, ser *sonarr.Series, watched
 		return result
 	}
 
-	// All episodes on disk are watched!
+	// All episodes on disk are watched, but check if more episodes are coming
+	if progress.NextEpisode != nil {
+		result.Action = "skipped"
+		result.Reason = buildAwaitingReason(progress, seasons)
+		return result
+	}
+
+	// All episodes on disk are watched and no more episodes coming!
 	// Build reason with season info
 	seasonsOnDisk := getSeasonsWithFiles(ser)
 	watchedReason := fmt.Sprintf("all on-disk episodes watched (S%s)", formatSeasons(seasonsOnDisk))
@@ -214,6 +224,40 @@ func (s *Service) processSeries(ctx context.Context, ser *sonarr.Series, watched
 	result.Reason = watchedReason + " - added to queue"
 	result.DaysUntil = s.cfg.DelayDays
 	return result
+}
+
+// buildAwaitingReason builds the skip reason when more episodes are coming
+func buildAwaitingReason(progress *trakt.ShowProgress, seasons []trakt.SeasonSummary) string {
+	nextEp := progress.NextEpisode
+	seasonNum := nextEp.Season
+
+	// Find season progress
+	var seasonProgress *trakt.SeasonProgress
+	for i := range progress.Seasons {
+		if progress.Seasons[i].Number == seasonNum {
+			seasonProgress = &progress.Seasons[i]
+			break
+		}
+	}
+
+	// Find total episode count from seasons
+	total := 0
+	for _, s := range seasons {
+		if s.Number == seasonNum {
+			total = s.EpisodeCount
+			break
+		}
+	}
+
+	if seasonProgress != nil {
+		if total == 0 {
+			total = seasonProgress.Aired // fallback
+		}
+		return fmt.Sprintf("S%02d ongoing (%d/%d eps, %d aired)",
+			seasonNum, seasonProgress.Completed, total, seasonProgress.Aired)
+	}
+
+	return fmt.Sprintf("S%02d ongoing", seasonNum)
 }
 
 // formatSeasons formats season numbers like "1,2,3" or "2"
