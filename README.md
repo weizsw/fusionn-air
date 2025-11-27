@@ -1,9 +1,10 @@
 # Fusionn-Air
 
-Automated media management service with two main features:
+Automated media management service with three main features:
 
 1. **Auto-Request** - Monitors Trakt calendar and requests new seasons via Overseerr when you've completed watching previous seasons
 2. **Auto-Cleanup** - Removes fully watched series from Sonarr after a configurable delay
+3. **Notifications** - Sends alerts via Apprise to Slack, Discord, Telegram, etc.
 
 ## Features
 
@@ -19,9 +20,18 @@ Automated media management service with two main features:
 
 - Identifies fully watched series in Sonarr via Trakt
 - Removes when all **on-disk episodes** are watched (works with continuing series too)
+- Skips series with more episodes coming (ongoing seasons)
+- Skips unmonitored series in Sonarr
 - Configurable delay (default 3 days) before removal
 - Exclusion list for series you want to keep forever
 - Deletes files from disk when removing from Sonarr
+
+### 🔔 Notifications (Apprise)
+
+- Send notifications via [Apprise](https://github.com/caronc/apprise) to 80+ services
+- Slack, Discord, Telegram, Email, Pushover, and more
+- Notifies on new season requests and series removals
+- Slack-optimized formatting for readability
 
 ## Quick Start
 
@@ -75,6 +85,13 @@ cleanup:
   enabled: false
   delay_days: 3
   exclusions: []  # e.g. ["Breaking Bad", "The Office"]
+
+# Notifications via Apprise (optional)
+apprise:
+  enabled: false
+  base_url: "http://apprise:8000"
+  key: "apprise"
+  tag: "fusionn-air"
 ```
 
 ### 3. Run
@@ -150,6 +167,12 @@ cleanup:
   enabled: false          # Enable cleanup feature
   delay_days: 3           # Days to wait after fully watched before removing
   exclusions: []          # Series titles to never remove
+
+apprise:
+  enabled: false          # Enable notifications
+  base_url: ""            # Apprise API URL (e.g., http://apprise:8000)
+  key: "apprise"          # Apprise config key
+  tag: "fusionn-air"      # Tag to filter services
 ```
 
 ### Environment Variables
@@ -162,6 +185,59 @@ FUSIONN_AIR_OVERSEERR_API_KEY=xxx
 FUSIONN_AIR_SONARR_API_KEY=xxx
 FUSIONN_AIR_WATCHER_ENABLED=true
 FUSIONN_AIR_CLEANUP_ENABLED=true
+FUSIONN_AIR_APPRISE_ENABLED=true
+FUSIONN_AIR_APPRISE_BASE_URL=http://apprise:8000
+FUSIONN_AIR_APPRISE_KEY=apprise
+FUSIONN_AIR_APPRISE_TAG=fusionn-air
+```
+
+## Notifications (Apprise)
+
+To enable notifications, run an [Apprise](https://github.com/caronc/apprise-api) container and configure your notification services.
+
+### 1. Add Apprise to docker-compose.yaml
+
+```yaml
+services:
+  apprise:
+    image: caronc/apprise:latest
+    container_name: apprise
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./apprise:/config
+    restart: unless-stopped
+```
+
+### 2. Create Apprise config
+
+Create `apprise/apprise.yml`:
+
+```yaml
+urls:
+  # Slack webhook
+  - slack://tokenA/tokenB/tokenC:
+      tag: fusionn-air
+
+  # Discord webhook
+  - discord://webhook_id/webhook_token:
+      tag: fusionn-air
+
+  # Telegram
+  - tgram://bot_token/chat_id:
+      tag: fusionn-air
+```
+
+See [Apprise Wiki](https://github.com/caronc/apprise/wiki) for all supported services.
+
+### 3. Enable in fusionn-air
+
+```yaml
+apprise:
+  enabled: true
+  base_url: "http://apprise:8000"
+  key: "apprise"
+  tag: "fusionn-air"
 ```
 
 ## Docker

@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/fusionn-air/internal/client/apprise"
 	"github.com/fusionn-air/internal/client/sonarr"
 	"github.com/fusionn-air/internal/client/trakt"
 	"github.com/fusionn-air/internal/config"
@@ -15,11 +16,12 @@ import (
 
 // Service handles cleanup of fully watched series
 type Service struct {
-	sonarr *sonarr.Client
-	trakt  *trakt.Client
-	cfg    config.CleanupConfig
-	dryRun bool
-	queue  *Queue
+	sonarr  *sonarr.Client
+	trakt   *trakt.Client
+	apprise *apprise.Client
+	cfg     config.CleanupConfig
+	dryRun  bool
+	queue   *Queue
 
 	mu          sync.RWMutex
 	lastRun     time.Time
@@ -46,13 +48,14 @@ type SeriesResult struct {
 	SizeOnDisk string `json:"size_on_disk,omitempty"`
 }
 
-func NewService(sonarrClient *sonarr.Client, traktClient *trakt.Client, cfg config.CleanupConfig, dryRun bool) *Service {
+func NewService(sonarrClient *sonarr.Client, traktClient *trakt.Client, appriseClient *apprise.Client, cfg config.CleanupConfig, dryRun bool) *Service {
 	return &Service{
-		sonarr: sonarrClient,
-		trakt:  traktClient,
-		cfg:    cfg,
-		dryRun: dryRun,
-		queue:  NewQueue(),
+		sonarr:  sonarrClient,
+		trakt:   traktClient,
+		apprise: appriseClient,
+		cfg:     cfg,
+		dryRun:  dryRun,
+		queue:   NewQueue(),
 	}
 }
 
@@ -131,6 +134,9 @@ func (s *Service) ProcessCleanup(ctx context.Context) (*ProcessingResult, error)
 
 	// Print summary
 	s.printSummary(result, startTime)
+
+	// Send notification
+	s.sendNotification(ctx, result)
 
 	return result, nil
 }
@@ -590,6 +596,45 @@ func (s *Service) printSummary(result *ProcessingResult, startTime time.Time) {
 	logger.Info("────────────────────────────────────────────────────────────────")
 	logger.Infof("⏱️  Completed in %v", time.Since(startTime).Round(time.Millisecond))
 	logger.Info("")
+}
+
+// sendNotification sends a notification with cleanup results
+func (s *Service) sendNotification(ctx context.Context, result *ProcessingResult) {
+	if s.apprise == nil || !s.apprise.IsEnabled() {
+		return
+	}
+
+	// Build notification
+	logger.Info("🔔 Sending notification...")
+	formatter := &apprise.SlackFormatter{}
+	var details []apprise.CleanupDetail
+	for _, r := range result.Details {
+		details = append(details, apprise.CleanupDetail{
+			Title:      r.Title,
+			Action:     r.Action,
+			Reason:     r.Reason,
+			DaysUntil:  r.DaysUntil,
+			SizeOnDisk: r.SizeOnDisk,
+		})
+	}
+
+	title := "🧹 Cleanup Results"
+	if s.dryRun {
+		title = "🧹 Cleanup Results (DRY RUN)"
+	}
+
+	body := formatter.FormatCleanupResults(result.Removed, result.MarkedForQueue, result.Skipped, result.Errors, details, s.dryRun)
+
+	notifyType := "info"
+	if result.Removed > 0 {
+		notifyType = "success"
+	}
+
+	if err := s.apprise.Notify(ctx, title, body, notifyType); err != nil {
+		logger.Warnf("🔔 Failed to send notification: %v", err)
+	} else {
+		logger.Info("🔔 Notification sent successfully")
+	}
 }
 
 // GetStats returns the current cleanup stats

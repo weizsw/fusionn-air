@@ -14,6 +14,7 @@ type Config struct {
 	Scheduler SchedulerConfig `mapstructure:"scheduler"`
 	Watcher   WatcherConfig   `mapstructure:"watcher"`
 	Cleanup   CleanupConfig   `mapstructure:"cleanup"`
+	Apprise   AppriseConfig   `mapstructure:"apprise"`
 }
 
 type ServerConfig struct {
@@ -52,6 +53,13 @@ type CleanupConfig struct {
 	Enabled    bool     `mapstructure:"enabled"`
 	DelayDays  int      `mapstructure:"delay_days"` // Days to wait after fully watched
 	Exclusions []string `mapstructure:"exclusions"` // Series titles to never remove
+}
+
+type AppriseConfig struct {
+	Enabled bool   `mapstructure:"enabled"`
+	BaseURL string `mapstructure:"base_url"` // Apprise API URL (e.g., http://apprise:8000)
+	Key     string `mapstructure:"key"`      // Apprise config key (default: apprise)
+	Tag     string `mapstructure:"tag"`      // Tag to filter services (default: all)
 }
 
 func Load(path string) (*Config, error) {
