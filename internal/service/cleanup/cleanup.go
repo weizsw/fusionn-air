@@ -341,40 +341,6 @@ func buildWatchingReason(progress *trakt.ShowProgress, seasons []trakt.SeasonSum
 	return fmt.Sprintf("S%02d not watched", seasonNum)
 }
 
-// buildAwaitingReason builds the skip reason when more episodes are coming
-func buildAwaitingReason(progress *trakt.ShowProgress, seasons []trakt.SeasonSummary) string {
-	nextEp := progress.NextEpisode
-	seasonNum := nextEp.Season
-
-	// Find season progress
-	var seasonProgress *trakt.SeasonProgress
-	for i := range progress.Seasons {
-		if progress.Seasons[i].Number == seasonNum {
-			seasonProgress = &progress.Seasons[i]
-			break
-		}
-	}
-
-	// Find total episode count from seasons
-	total := 0
-	for _, s := range seasons {
-		if s.Number == seasonNum {
-			total = s.EpisodeCount
-			break
-		}
-	}
-
-	if seasonProgress != nil {
-		if total == 0 {
-			total = seasonProgress.Aired // fallback
-		}
-		return fmt.Sprintf("S%02d ongoing (%d/%d eps, %d aired)",
-			seasonNum, seasonProgress.Completed, total, seasonProgress.Aired)
-	}
-
-	return fmt.Sprintf("S%02d ongoing", seasonNum)
-}
-
 // formatSeasons formats season numbers like "1,2,3" or "2"
 func formatSeasons(seasons []int) string {
 	if len(seasons) == 0 {
