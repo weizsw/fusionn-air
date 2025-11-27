@@ -47,9 +47,9 @@ func Init(isDev bool) {
 	Log = logger.Sugar()
 }
 
-// customTimeEncoder formats time as "15:04:05" for cleaner logs
+// customTimeEncoder formats time as "2006-01-02 15:04:05" for logs
 func customTimeEncoder(t time.Time, enc zapcore.PrimitiveArrayEncoder) {
-	enc.AppendString(t.Format("15:04:05"))
+	enc.AppendString(t.Format("2006-01-02 15:04:05"))
 }
 
 func Sync() {
