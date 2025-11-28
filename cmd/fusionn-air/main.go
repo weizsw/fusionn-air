@@ -13,6 +13,7 @@ import (
 
 	"github.com/fusionn-air/internal/client/apprise"
 	"github.com/fusionn-air/internal/client/overseerr"
+	"github.com/fusionn-air/internal/client/radarr"
 	"github.com/fusionn-air/internal/client/sonarr"
 	"github.com/fusionn-air/internal/client/trakt"
 	"github.com/fusionn-air/internal/config"
@@ -77,16 +78,27 @@ func main() {
 		logger.Info("🔔 Notifications: disabled")
 	}
 
-	// Initialize Sonarr client (if cleanup enabled)
+	// Initialize Sonarr and Radarr clients (if cleanup enabled)
 	var sonarrClient *sonarr.Client
+	var radarrClient *radarr.Client
 	var cleanupService *cleanup.Service
 
 	if cfg.Cleanup.Enabled {
-		logger.Info("🔗 Connecting to Sonarr...")
-		sonarrClient = sonarr.NewClient(cfg.Sonarr)
-		logger.Info("✅  Sonarr configured")
+		// Sonarr (TV shows)
+		if cfg.Sonarr.BaseURL != "" {
+			logger.Info("🔗 Connecting to Sonarr...")
+			sonarrClient = sonarr.NewClient(cfg.Sonarr)
+			logger.Info("✅  Sonarr configured")
+		}
 
-		cleanupService = cleanup.NewService(sonarrClient, traktClient, appriseClient, cfg.Cleanup, cfg.Scheduler.DryRun)
+		// Radarr (Movies)
+		if cfg.Radarr.BaseURL != "" {
+			logger.Info("🔗 Connecting to Radarr...")
+			radarrClient = radarr.NewClient(cfg.Radarr)
+			logger.Info("✅  Radarr configured")
+		}
+
+		cleanupService = cleanup.NewService(sonarrClient, radarrClient, traktClient, appriseClient, cfg.Cleanup, cfg.Scheduler.DryRun)
 		logger.Infof("🧹 Cleanup: enabled (delay=%d days)", cfg.Cleanup.DelayDays)
 	} else {
 		logger.Info("🧹 Cleanup: disabled")

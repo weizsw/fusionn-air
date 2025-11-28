@@ -17,6 +17,7 @@ type Config struct {
 	Trakt     TraktConfig     `mapstructure:"trakt"`
 	Overseerr OverseerrConfig `mapstructure:"overseerr"`
 	Sonarr    SonarrConfig    `mapstructure:"sonarr"`
+	Radarr    RadarrConfig    `mapstructure:"radarr"`
 	Scheduler SchedulerConfig `mapstructure:"scheduler"`
 	Watcher   WatcherConfig   `mapstructure:"watcher"`
 	Cleanup   CleanupConfig   `mapstructure:"cleanup"`
@@ -40,6 +41,11 @@ type OverseerrConfig struct {
 }
 
 type SonarrConfig struct {
+	BaseURL string `mapstructure:"base_url"`
+	APIKey  string `mapstructure:"api_key"`
+}
+
+type RadarrConfig struct {
 	BaseURL string `mapstructure:"base_url"`
 	APIKey  string `mapstructure:"api_key"`
 }

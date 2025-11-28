@@ -6,10 +6,11 @@
 # Required setup:
 #   1. Create Trakt app at https://trakt.tv/oauth/applications
 #   2. Get Overseerr API key from Settings > General
-#   3. Get Sonarr API key from Settings > General (if using cleanup)
-#   4. Copy this file: cp config.example.yaml config.yaml
-#   5. Edit config.yaml with your values
-#   6. Start the service
+#   3. Get Sonarr API key from Settings > General (if using TV show cleanup)
+#   4. Get Radarr API key from Settings > General (if using movie cleanup)
+#   5. Copy this file: cp config.example.yaml config.yaml
+#   6. Edit config.yaml with your values
+#   7. Start the service
 
 server:
   port: 8080
@@ -46,14 +47,24 @@ overseerr:
   user_id: 0                          # Optional - request as specific user
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SONARR (Required for Cleanup)
+# SONARR (Required for TV show Cleanup)
 # ─────────────────────────────────────────────────────────────────────────────
 # Get API key from: Sonarr > Settings > General
 #
-# Only needed if cleanup.enabled is true.
+# Only needed if cleanup.enabled is true and you want TV show cleanup.
 sonarr:
-  base_url: "http://sonarr:8989"  # REQUIRED for cleanup - adjust to your setup
-  api_key: ""                      # REQUIRED for cleanup - from Sonarr settings
+  base_url: "http://sonarr:8989"  # Required for TV cleanup - adjust to your setup
+  api_key: ""                      # Required for TV cleanup - from Sonarr settings
+
+# ─────────────────────────────────────────────────────────────────────────────
+# RADARR (Required for Movie Cleanup)
+# ─────────────────────────────────────────────────────────────────────────────
+# Get API key from: Radarr > Settings > General
+#
+# Only needed if cleanup.enabled is true and you want movie cleanup.
+radarr:
+  base_url: "http://radarr:7878"  # Required for movie cleanup - adjust to your setup
+  api_key: ""                      # Required for movie cleanup - from Radarr settings
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SCHEDULER (Shared settings for both Watcher and Cleanup)
@@ -89,12 +100,13 @@ watcher:
   calendar_days: 14
 
 # ─────────────────────────────────────────────────────────────────────────────
-# CLEANUP - Auto-remove fully watched series from Sonarr
+# CLEANUP - Auto-remove fully watched content from Sonarr/Radarr
 # ─────────────────────────────────────────────────────────────────────────────
-# Removes series from Sonarr (including files) when:
-#   - All episodes ON DISK have been watched on Trakt
-#   - Series has been in removal queue for delay_days
-#   - Series is not in exclusions list
+# Removes TV shows from Sonarr and movies from Radarr (including files) when:
+#   - TV shows: All episodes ON DISK have been watched on Trakt
+#   - Movies: Movie has been watched on Trakt
+#   - Item has been in removal queue for delay_days
+#   - Title is not in exclusions list
 #
 # Note: Works with continuing series too - only checks episodes you have,
 # not future seasons.
@@ -106,14 +118,15 @@ cleanup:
   # Gives you time to rewatch or change your mind
   delay_days: 3
 
-  # Series to NEVER remove (case-insensitive)
-  # Useful for shows you want to keep permanently
+  # Titles to NEVER remove (case-insensitive, works for both shows and movies)
+  # Useful for content you want to keep permanently
   exclusions: []
   # Example:
   # exclusions:
   #   - "Breaking Bad"
   #   - "The Office"
-  #   - "Game of Thrones"
+  #   - "Inception"
+  #   - "The Dark Knight"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # APPRISE - Notifications (Optional)

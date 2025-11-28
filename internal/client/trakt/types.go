@@ -92,3 +92,18 @@ type SeasonSummary struct {
 	Title         string `json:"title"`
 	Overview      string `json:"overview"`
 }
+
+// Movie represents a movie from Trakt
+type Movie struct {
+	Title string `json:"title"`
+	Year  int    `json:"year"`
+	IDs   IDs    `json:"ids"`
+}
+
+// WatchedMovie from /users/me/watched/movies
+type WatchedMovie struct {
+	Plays         int       `json:"plays"`
+	LastWatchedAt time.Time `json:"last_watched_at"`
+	LastUpdatedAt time.Time `json:"last_updated_at"`
+	Movie         Movie     `json:"movie"`
+}
