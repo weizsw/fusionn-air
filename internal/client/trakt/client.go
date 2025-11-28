@@ -191,3 +191,27 @@ func (c *Client) GetShowSeasons(ctx context.Context, showID int) ([]SeasonSummar
 
 	return seasons, nil
 }
+
+// GetWatchedMovies returns all movies the user has watched
+func (c *Client) GetWatchedMovies(ctx context.Context) ([]WatchedMovie, error) {
+	if err := c.ensureAuth(ctx); err != nil {
+		return nil, fmt.Errorf("auth: %w", err)
+	}
+
+	var movies []WatchedMovie
+	resp, err := c.client.R().
+		SetContext(ctx).
+		SetResult(&movies).
+		Get("/users/me/watched/movies")
+
+	if err != nil {
+		return nil, fmt.Errorf("getting watched movies: %w", err)
+	}
+
+	if resp.IsError() {
+		return nil, fmt.Errorf("API error: status=%d", resp.StatusCode())
+	}
+
+	logger.Debugf("Fetched %d watched movies from Trakt", len(movies))
+	return movies, nil
+}

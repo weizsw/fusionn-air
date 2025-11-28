@@ -3,7 +3,7 @@
 Automated media management service with three main features:
 
 1. **Auto-Request** - Monitors Trakt calendar and requests new seasons via Overseerr when you've completed watching previous seasons
-2. **Auto-Cleanup** - Removes fully watched series from Sonarr after a configurable delay
+2. **Auto-Cleanup** - Removes fully watched TV shows (Sonarr) and movies (Radarr) after a configurable delay
 3. **Notifications** - Sends alerts via Apprise to Slack, Discord, Telegram, etc.
 
 ## Features
@@ -18,13 +18,20 @@ Automated media management service with three main features:
 
 ### 🧹 Auto-Cleanup
 
-- Identifies fully watched series in Sonarr via Trakt
+**TV Shows (Sonarr):**
+- Identifies fully watched series via Trakt
 - Removes when all **on-disk episodes** are watched (works with continuing series too)
 - Skips series with more episodes coming (ongoing seasons)
-- Skips unmonitored series in Sonarr
+- Skips unmonitored series
+
+**Movies (Radarr):**
+- Identifies watched movies via Trakt
+- Removes movies marked as watched
+
+**Shared:**
 - Configurable delay (default 3 days) before removal
-- Exclusion list for series you want to keep forever
-- Deletes files from disk when removing from Sonarr
+- Exclusion list for titles you want to keep forever
+- Deletes files from disk when removing
 
 ### 🔔 Notifications (Apprise)
 
@@ -69,6 +76,10 @@ sonarr:
   base_url: "http://localhost:8989"
   api_key: "your-api-key"
 
+radarr:
+  base_url: "http://localhost:7878"
+  api_key: "your-api-key"
+
 # Shared scheduler settings (applies to both watcher and cleanup)
 scheduler:
   cron: "0 */6 * * *"  # Every 6 hours
@@ -80,11 +91,11 @@ watcher:
   enabled: true
   calendar_days: 14
 
-# Cleanup - auto-remove fully watched series
+# Cleanup - auto-remove fully watched content
 cleanup:
   enabled: false
   delay_days: 3
-  exclusions: []  # e.g. ["Breaking Bad", "The Office"]
+  exclusions: []  # e.g. ["Breaking Bad", "Inception"]
 
 # Notifications via Apprise (optional)
 apprise:
@@ -151,8 +162,12 @@ overseerr:
   user_id: 0              # Request as specific user (0 = API key owner)
 
 sonarr:
-  base_url: ""            # Required for cleanup
-  api_key: ""             # Required for cleanup
+  base_url: ""            # Required for TV show cleanup
+  api_key: ""             # Required for TV show cleanup
+
+radarr:
+  base_url: ""            # Required for movie cleanup
+  api_key: ""             # Required for movie cleanup
 
 scheduler:
   cron: "0 */6 * * *"     # Cron schedule (applies to both watcher and cleanup)
@@ -166,7 +181,7 @@ watcher:
 cleanup:
   enabled: false          # Enable cleanup feature
   delay_days: 3           # Days to wait after fully watched before removing
-  exclusions: []          # Series titles to never remove
+  exclusions: []          # Titles to never remove (works for both shows and movies)
 
 apprise:
   enabled: false          # Enable notifications
@@ -183,6 +198,7 @@ Override any config with `FUSIONN_AIR_` prefix:
 FUSIONN_AIR_TRAKT_CLIENT_ID=xxx
 FUSIONN_AIR_OVERSEERR_API_KEY=xxx
 FUSIONN_AIR_SONARR_API_KEY=xxx
+FUSIONN_AIR_RADARR_API_KEY=xxx
 FUSIONN_AIR_WATCHER_ENABLED=true
 FUSIONN_AIR_CLEANUP_ENABLED=true
 FUSIONN_AIR_APPRISE_ENABLED=true
@@ -286,10 +302,10 @@ docker run -d \
 ### Cleanup (Auto-Remove)
 
 ```
-┌─────────────────┐
-│  Sonarr Series  │
-└────────┬────────┘
-         ▼
+┌─────────────────────────────────────┐
+│  Sonarr (TV) + Radarr (Movies)      │
+└────────────────┬────────────────────┘
+                 ▼
 ┌─────────────────┐     Yes     ┌──────────┐
 │ In exclusion    ├────────────►│  Skip    │
 │ list?           │             └──────────┘
@@ -297,10 +313,9 @@ docker run -d \
          │ No
          ▼
 ┌─────────────────┐     No      ┌──────────┐
-│ All on-disk     ├────────────►│  Skip    │
-│ episodes watched│             │ (still   │
-│ on Trakt?       │             │ watching)│
-└────────┬────────┘             └──────────┘
+│ Fully watched   ├────────────►│  Skip    │
+│ on Trakt?       │             └──────────┘
+└────────┬────────┘
          │ Yes
          ▼
 ┌─────────────────┐
@@ -309,8 +324,8 @@ docker run -d \
 └────────┬────────┘
          │
          ▼
-┌─────────────────┐
-│ After delay_days│────────────► Delete from Sonarr
+┌─────────────────┐              Delete from
+│ After delay_days│────────────► Sonarr/Radarr
 │ in queue        │              (with files)
 └─────────────────┘
 ```

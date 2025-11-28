@@ -8,12 +8,10 @@ import (
 	"time"
 )
 
-const queueFile = "data/cleanup_queue.json"
-
-// QueueItem represents a series marked for removal
+// QueueItem represents any media item marked for removal
 type QueueItem struct {
-	SonarrID   int       `json:"sonarr_id"`
-	TvdbID     int       `json:"tvdb_id"`
+	ID         int       `json:"id"`          // Sonarr/Radarr/etc ID
+	ExternalID int       `json:"external_id"` // TVDB for shows, TMDB for movies
 	Title      string    `json:"title"`
 	MarkedAt   time.Time `json:"marked_at"`
 	Reason     string    `json:"reason"`
@@ -22,46 +20,48 @@ type QueueItem struct {
 
 // Queue manages the cleanup queue persistence
 type Queue struct {
-	mu    sync.RWMutex
-	items map[int]*QueueItem // keyed by Sonarr ID
+	mu       sync.RWMutex
+	items    map[int]*QueueItem // keyed by ID
+	filePath string
 }
 
-// NewQueue creates a new queue and loads existing data
-func NewQueue() *Queue {
+// NewQueueWithFile creates a new queue with a specific file path
+func NewQueueWithFile(path string) *Queue {
 	q := &Queue{
-		items: make(map[int]*QueueItem),
+		items:    make(map[int]*QueueItem),
+		filePath: path,
 	}
 	_ = q.load()
 	return q
 }
 
-// Add adds a series to the cleanup queue
+// Add adds an item to the queue
 func (q *Queue) Add(item *QueueItem) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
 	// Don't overwrite if already in queue (preserve original marked time)
-	if _, exists := q.items[item.SonarrID]; !exists {
-		q.items[item.SonarrID] = item
+	if _, exists := q.items[item.ID]; !exists {
+		q.items[item.ID] = item
 		_ = q.save()
 	}
 }
 
-// Remove removes a series from the queue
-func (q *Queue) Remove(sonarrID int) {
+// Remove removes an item from the queue
+func (q *Queue) Remove(id int) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
-	delete(q.items, sonarrID)
+	delete(q.items, id)
 	_ = q.save()
 }
 
-// Get returns a queue item by Sonarr ID
-func (q *Queue) Get(sonarrID int) *QueueItem {
+// Get returns a queue item by ID
+func (q *Queue) Get(id int) *QueueItem {
 	q.mu.RLock()
 	defer q.mu.RUnlock()
 
-	return q.items[sonarrID]
+	return q.items[id]
 }
 
 // GetAll returns all items in the queue
@@ -93,18 +93,18 @@ func (q *Queue) GetReadyForRemoval(delayDays int) []*QueueItem {
 	return ready
 }
 
-// IsQueued checks if a series is in the queue
-func (q *Queue) IsQueued(sonarrID int) bool {
+// IsQueued checks if an item is in the queue
+func (q *Queue) IsQueued(id int) bool {
 	q.mu.RLock()
 	defer q.mu.RUnlock()
 
-	_, exists := q.items[sonarrID]
+	_, exists := q.items[id]
 	return exists
 }
 
 // load reads the queue from disk
 func (q *Queue) load() error {
-	data, err := os.ReadFile(queueFile)
+	data, err := os.ReadFile(q.filePath)
 	if err != nil {
 		return err
 	}
@@ -115,7 +115,7 @@ func (q *Queue) load() error {
 	}
 
 	for _, item := range items {
-		q.items[item.SonarrID] = item
+		q.items[item.ID] = item
 	}
 
 	return nil
@@ -123,7 +123,7 @@ func (q *Queue) load() error {
 
 // save writes the queue to disk
 func (q *Queue) save() error {
-	dir := filepath.Dir(queueFile)
+	dir := filepath.Dir(q.filePath)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
@@ -138,7 +138,7 @@ func (q *Queue) save() error {
 		return err
 	}
 
-	return os.WriteFile(queueFile, data, 0o600)
+	return os.WriteFile(q.filePath, data, 0o600)
 }
 
 // Clear removes all items from the queue

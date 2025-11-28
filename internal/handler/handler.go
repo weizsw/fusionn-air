@@ -124,7 +124,7 @@ func (h *Handler) CleanupQueue(c *gin.Context) {
 		return
 	}
 
-	queue := h.cleanup.GetQueue()
+	queue := h.cleanup.GetAllQueues()
 	c.JSON(http.StatusOK, gin.H{
 		"enabled": true,
 		"queue":   queue,
