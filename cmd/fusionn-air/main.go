@@ -39,10 +39,11 @@ func main() {
 	}
 
 	logger.Infof("📁 Loading config: %s", configPath)
-	cfg, err := config.Load(configPath)
+	cfgMgr, err := config.NewManager(configPath)
 	if err != nil {
 		logger.Fatalf("❌ Config error: %v", err)
 	}
+	cfg := cfgMgr.Get()
 
 	if cfg.Scheduler.DryRun {
 		logger.Warn("⚠️  DRY RUN MODE - No actual requests/deletions will be made")
