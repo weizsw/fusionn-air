@@ -30,27 +30,27 @@ func (f *SlackFormatter) FormatWatcherResults(requested, skipped, errors int, de
 
 	// Requested section
 	if len(requestedItems) > 0 {
-		sb.WriteString(fmt.Sprintf("*📥 REQUESTED (%d):*\n", len(requestedItems)))
+		fmt.Fprintf(&sb, "*📥 REQUESTED (%d):*\n", len(requestedItems))
 		for _, item := range requestedItems {
-			sb.WriteString(fmt.Sprintf("✅ %s S%02d ← %s\n", item.ShowTitle, item.Season, item.Reason))
+			fmt.Fprintf(&sb, "• %s S%02d ← %s\n", item.ShowTitle, item.Season, item.Reason)
 		}
 		sb.WriteString("\n")
 	}
 
 	// Skipped section
 	if len(skippedItems) > 0 {
-		sb.WriteString(fmt.Sprintf("*⏭️ SKIPPED (%d):*\n", len(skippedItems)))
+		fmt.Fprintf(&sb, "*SKIPPED (%d):*\n", len(skippedItems))
 		for _, item := range skippedItems {
-			sb.WriteString(fmt.Sprintf("⏭️ %s S%02d ← %s\n", item.ShowTitle, item.Season, item.Reason))
+			fmt.Fprintf(&sb, "• %s S%02d ← %s\n", item.ShowTitle, item.Season, item.Reason)
 		}
 		sb.WriteString("\n")
 	}
 
 	// Errors section
 	if len(errorItems) > 0 {
-		sb.WriteString(fmt.Sprintf("*❌ ERRORS (%d):*\n", len(errorItems)))
+		fmt.Fprintf(&sb, "*ERRORS (%d):*\n", len(errorItems))
 		for _, item := range errorItems {
-			sb.WriteString(fmt.Sprintf("❌ %s S%02d ← %s\n", item.ShowTitle, item.Season, item.Reason))
+			fmt.Fprintf(&sb, "• %s S%02d ← %s\n", item.ShowTitle, item.Season, item.Reason)
 		}
 	}
 
