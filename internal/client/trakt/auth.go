@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
 
@@ -53,8 +54,9 @@ type AuthManager struct {
 	clientSecret string
 	baseURL      string
 
-	mu     sync.RWMutex
-	tokens *TokenStore
+	mu         sync.RWMutex
+	tokens     *TokenStore
+	retryAfter time.Time // Rate limit retry-after for OAuth endpoints
 }
 
 // NewAuthManager creates a new auth manager
@@ -62,7 +64,9 @@ func NewAuthManager(clientID, clientSecret, baseURL string) *AuthManager {
 	return &AuthManager{
 		client: resty.New().
 			SetTimeout(30*time.Second).
-			SetHeader("Content-Type", "application/json"),
+			SetHeader("Content-Type", "application/json").
+			SetRetryCount(2).
+			SetRetryWaitTime(5 * time.Second),
 		clientID:     clientID,
 		clientSecret: clientSecret,
 		baseURL:      baseURL,
@@ -271,9 +275,23 @@ func (a *AuthManager) pollToken(ctx context.Context, deviceCode string) (*TokenR
 
 // refreshTokens refreshes the access token
 func (a *AuthManager) refreshTokens(ctx context.Context) error {
+	// Check if we need to wait for rate limit
 	a.mu.RLock()
+	retryAfter := a.retryAfter
 	refreshToken := a.tokens.RefreshToken
 	a.mu.RUnlock()
+
+	if time.Now().Before(retryAfter) {
+		waitTime := time.Until(retryAfter)
+		logger.Debugf("Waiting %v for OAuth rate limit reset", waitTime.Round(time.Second))
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(waitTime):
+		}
+	}
+
+	logger.Debug("Refreshing Trakt access token...")
 
 	var token TokenResponse
 	resp, err := a.client.R().
@@ -291,6 +309,26 @@ func (a *AuthManager) refreshTokens(ctx context.Context) error {
 		return fmt.Errorf("refreshing token: %w", err)
 	}
 
+	// Handle rate limit from response headers
+	if retryAfterStr := resp.Header().Get("Retry-After"); retryAfterStr != "" {
+		if seconds, err := strconv.Atoi(retryAfterStr); err == nil {
+			a.mu.Lock()
+			a.retryAfter = time.Now().Add(time.Duration(seconds) * time.Second)
+			a.mu.Unlock()
+			logger.Warnf("OAuth rate limit: retry after %d seconds", seconds)
+		}
+	}
+
+	if resp.StatusCode() == 429 {
+		// Set default retry after if header wasn't present
+		a.mu.Lock()
+		if a.retryAfter.Before(time.Now()) {
+			a.retryAfter = time.Now().Add(60 * time.Second)
+		}
+		a.mu.Unlock()
+		return fmt.Errorf("oauth rate limit exceeded")
+	}
+
 	if resp.IsError() {
 		return fmt.Errorf("refresh error: %s", resp.String())
 	}
@@ -304,6 +342,7 @@ func (a *AuthManager) refreshTokens(ctx context.Context) error {
 	}
 	a.mu.Unlock()
 
+	logger.Debug("Trakt access token refreshed successfully")
 	return a.saveTokens()
 }
 
