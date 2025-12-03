@@ -10,45 +10,16 @@ import (
 )
 
 func (s *Service) printSummary(result *ProcessingResult, startTime time.Time) {
-	var toRemove, queued, skipped, errors []string
+	// Separate results by media type
+	seriesResults := make(map[string][]MediaResult)
+	movieResults := make(map[string][]MediaResult)
 
 	for _, r := range result.Results {
-		icon := mediaIcon(r.Type)
-		title := r.Title
-		if r.Year > 0 {
-			title = fmt.Sprintf("%s (%d)", r.Title, r.Year)
-		}
-
-		switch r.Action {
-		case "removed", "dry_run_remove":
-			info := fmt.Sprintf("   ✅ %s %-33s", icon, title)
-			if r.SizeOnDisk != "" {
-				info += fmt.Sprintf(" [%s]", r.SizeOnDisk)
-			}
-			info += fmt.Sprintf("  ← %s", r.Reason)
-			toRemove = append(toRemove, info)
-
-		case "queued":
-			info := fmt.Sprintf("   ⏳ %s %-33s", icon, title)
-			if r.SizeOnDisk != "" {
-				info += fmt.Sprintf(" [%s]", r.SizeOnDisk)
-			}
-			if r.DaysUntil > 0 {
-				info += fmt.Sprintf("  ← %s (in %d days)", r.Reason, r.DaysUntil)
-			} else {
-				info += fmt.Sprintf("  ← %s (ready)", r.Reason)
-			}
-			queued = append(queued, info)
-
-		case "skipped":
-			info := fmt.Sprintf("   ⏭️  %s %-33s", icon, title)
-			info += fmt.Sprintf("  ← %s", r.Reason)
-			skipped = append(skipped, info)
-
-		case "error":
-			info := fmt.Sprintf("   ❌ %s %-33s", icon, title)
-			info += fmt.Sprintf("  ← %s", r.Reason)
-			errors = append(errors, info)
+		switch r.Type {
+		case MediaTypeSeries:
+			seriesResults[r.Action] = append(seriesResults[r.Action], r)
+		case MediaTypeMovie:
+			movieResults[r.Action] = append(movieResults[r.Action], r)
 		}
 	}
 
@@ -57,41 +28,11 @@ func (s *Service) printSummary(result *ProcessingResult, startTime time.Time) {
 	logger.Info("│                    CLEANUP RESULTS                           │")
 	logger.Info("└──────────────────────────────────────────────────────────────┘")
 
-	if len(toRemove) > 0 {
-		logger.Info("")
-		if s.dryRun {
-			logger.Warnf("🗑️  WOULD REMOVE (%d):", len(toRemove))
-		} else {
-			logger.Infof("🗑️  REMOVED (%d):", len(toRemove))
-		}
-		for _, line := range toRemove {
-			logger.Info(line)
-		}
-	}
+	// Print Series section
+	s.printMediaSection("📺 SERIES", seriesResults)
 
-	if len(queued) > 0 {
-		logger.Info("")
-		logger.Infof("⏳ QUEUED FOR REMOVAL (%d):", len(queued))
-		for _, line := range queued {
-			logger.Info(line)
-		}
-	}
-
-	if len(skipped) > 0 {
-		logger.Info("")
-		logger.Infof("⏭️  SKIPPED (%d):", len(skipped))
-		for _, line := range skipped {
-			logger.Info(line)
-		}
-	}
-
-	if len(errors) > 0 {
-		logger.Info("")
-		logger.Errorf("❌ ERRORS (%d):", len(errors))
-		for _, line := range errors {
-			logger.Error(line)
-		}
-	}
+	// Print Movies section
+	s.printMediaSection("🎬 MOVIES", movieResults)
 
 	// Print per-type stats
 	logger.Info("")
@@ -102,6 +43,87 @@ func (s *Service) printSummary(result *ProcessingResult, startTime time.Time) {
 	}
 	logger.Infof("⏱️  Completed in %v", time.Since(startTime).Round(time.Millisecond))
 	logger.Info("")
+}
+
+func (s *Service) printMediaSection(header string, results map[string][]MediaResult) {
+	// Check if there's anything to print
+	hasContent := false
+	for _, items := range results {
+		if len(items) > 0 {
+			hasContent = true
+			break
+		}
+	}
+	if !hasContent {
+		return
+	}
+
+	logger.Info("")
+	logger.Infof("── %s ──", header)
+
+	// Removed items
+	removed := append(results["removed"], results["dry_run_remove"]...)
+	if len(removed) > 0 {
+		if s.dryRun {
+			logger.Warnf("  WOULD REMOVE (%d):", len(removed))
+		} else {
+			logger.Infof("  REMOVED (%d):", len(removed))
+		}
+		for _, r := range removed {
+			title := formatTitle(r)
+			info := fmt.Sprintf("   • %-35s", title)
+			if r.SizeOnDisk != "" {
+				info += fmt.Sprintf(" [%s]", r.SizeOnDisk)
+			}
+			info += fmt.Sprintf("  ← %s", r.Reason)
+			logger.Info(info)
+		}
+	}
+
+	// Queued items
+	if queued := results["queued"]; len(queued) > 0 {
+		logger.Infof("  QUEUED (%d):", len(queued))
+		for _, r := range queued {
+			title := formatTitle(r)
+			info := fmt.Sprintf("   • %-35s", title)
+			if r.SizeOnDisk != "" {
+				info += fmt.Sprintf(" [%s]", r.SizeOnDisk)
+			}
+			if r.DaysUntil > 0 {
+				info += fmt.Sprintf("  ← %s (in %d days)", r.Reason, r.DaysUntil)
+			} else {
+				info += fmt.Sprintf("  ← %s (ready)", r.Reason)
+			}
+			logger.Info(info)
+		}
+	}
+
+	// Skipped items
+	if skipped := results["skipped"]; len(skipped) > 0 {
+		logger.Infof("  SKIPPED (%d):", len(skipped))
+		for _, r := range skipped {
+			title := formatTitle(r)
+			info := fmt.Sprintf("   • %-35s  ← %s", title, r.Reason)
+			logger.Info(info)
+		}
+	}
+
+	// Error items
+	if errors := results["error"]; len(errors) > 0 {
+		logger.Errorf("  ERRORS (%d):", len(errors))
+		for _, r := range errors {
+			title := formatTitle(r)
+			info := fmt.Sprintf("   • %-35s  ← %s", title, r.Reason)
+			logger.Error(info)
+		}
+	}
+}
+
+func formatTitle(r MediaResult) string {
+	if r.Year > 0 {
+		return fmt.Sprintf("%s (%d)", r.Title, r.Year)
+	}
+	return r.Title
 }
 
 func (s *Service) sendNotification(ctx context.Context, result *ProcessingResult) {
@@ -120,6 +142,7 @@ func (s *Service) sendNotification(ctx context.Context, result *ProcessingResult
 			Reason:     r.Reason,
 			DaysUntil:  r.DaysUntil,
 			SizeOnDisk: r.SizeOnDisk,
+			MediaType:  string(r.Type),
 		})
 	}
 

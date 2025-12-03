@@ -3,21 +3,50 @@ package trakt
 import (
 	"context"
 	"fmt"
+	"strconv"
+	"sync"
 	"time"
 
 	"github.com/go-resty/resty/v2"
+	"golang.org/x/time/rate"
 
 	"github.com/fusionn-air/internal/config"
 	"github.com/fusionn-air/pkg/logger"
+)
+
+// Rate limits per Trakt API docs:
+// - POST/PUT/DELETE: 1 call per second
+// - GET: 1000 calls per 5 minutes (~3.33/sec)
+// After token refresh, stricter limits may apply temporarily
+const (
+	defaultGetRate  = 3                      // Conservative GET rate (3/sec vs 3.33 limit)
+	defaultPostRate = 1                      // POST/PUT/DELETE rate (1/sec)
+	burstSize       = 3                      // Conservative burst
+	minRequestDelay = 350 * time.Millisecond // Min delay between requests
 )
 
 type Client struct {
 	client   *resty.Client
 	auth     *AuthManager
 	clientID string
+
+	// Rate limiters
+	getLimiter  *rate.Limiter
+	postLimiter *rate.Limiter
+
+	// Adaptive rate limiting based on headers
+	mu          sync.Mutex
+	retryAfter  time.Time // When we can make requests again after 429
+	lastRequest time.Time
 }
 
 func NewClient(cfg config.TraktConfig) *Client {
+	c := &Client{
+		clientID:    cfg.ClientID,
+		getLimiter:  rate.NewLimiter(rate.Limit(defaultGetRate), burstSize),
+		postLimiter: rate.NewLimiter(rate.Limit(defaultPostRate), burstSize),
+	}
+
 	client := resty.New().
 		SetBaseURL(cfg.BaseURL).
 		SetTimeout(30*time.Second).
@@ -25,19 +54,100 @@ func NewClient(cfg config.TraktConfig) *Client {
 		SetHeader("trakt-api-version", "2").
 		SetHeader("trakt-api-key", cfg.ClientID).
 		SetRetryCount(3).
-		SetRetryWaitTime(1 * time.Second).
-		SetRetryMaxWaitTime(5 * time.Second).
+		SetRetryWaitTime(2 * time.Second).
+		SetRetryMaxWaitTime(30 * time.Second).
 		AddRetryCondition(func(r *resty.Response, err error) bool {
+			// Retry on 5xx errors only; handle 429 ourselves
 			return err != nil || r.StatusCode() >= 500
+		}).
+		OnAfterResponse(func(_ *resty.Client, resp *resty.Response) error {
+			// Handle rate limit headers
+			c.handleRateLimitHeaders(resp)
+			return nil
 		})
 
-	auth := NewAuthManager(cfg.ClientID, cfg.ClientSecret, cfg.BaseURL)
+	c.client = client
+	c.auth = NewAuthManager(cfg.ClientID, cfg.ClientSecret, cfg.BaseURL)
 
-	return &Client{
-		client:   client,
-		auth:     auth,
-		clientID: cfg.ClientID,
+	return c
+}
+
+// handleRateLimitHeaders processes rate limit info from response
+func (c *Client) handleRateLimitHeaders(resp *resty.Response) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// Check for Retry-After header (seconds until we can retry)
+	if retryAfter := resp.Header().Get("Retry-After"); retryAfter != "" {
+		if seconds, err := strconv.Atoi(retryAfter); err == nil {
+			c.retryAfter = time.Now().Add(time.Duration(seconds) * time.Second)
+			logger.Warnf("Trakt rate limit: retry after %d seconds", seconds)
+		}
 	}
+
+	// Log remaining requests if available
+	if remaining := resp.Header().Get("X-Ratelimit-Remaining"); remaining != "" {
+		if rem, err := strconv.Atoi(remaining); err == nil && rem < 50 {
+			logger.Debugf("Trakt rate limit: %d requests remaining", rem)
+		}
+	}
+}
+
+// waitForRate waits for rate limiter and any retry-after period
+func (c *Client) waitForRate(ctx context.Context, isPost bool) error {
+	c.mu.Lock()
+	retryAfter := c.retryAfter
+	lastReq := c.lastRequest
+	c.mu.Unlock()
+
+	// Wait for retry-after period if we hit 429
+	if time.Now().Before(retryAfter) {
+		waitTime := time.Until(retryAfter)
+		logger.Debugf("Waiting %v for rate limit reset", waitTime.Round(time.Second))
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(waitTime):
+		}
+	}
+
+	// Ensure minimum delay between requests
+	if elapsed := time.Since(lastReq); elapsed < minRequestDelay {
+		time.Sleep(minRequestDelay - elapsed)
+	}
+
+	// Use token bucket rate limiter
+	limiter := c.getLimiter
+	if isPost {
+		limiter = c.postLimiter
+	}
+
+	if err := limiter.Wait(ctx); err != nil {
+		return err
+	}
+
+	c.mu.Lock()
+	c.lastRequest = time.Now()
+	c.mu.Unlock()
+
+	return nil
+}
+
+// handleRateLimitResponse checks if we got a 429 and waits appropriately
+func (c *Client) handleRateLimitResponse(resp *resty.Response) bool {
+	if resp.StatusCode() != 429 {
+		return false
+	}
+
+	// Already handled by OnAfterResponse, but ensure we have a wait time
+	c.mu.Lock()
+	if c.retryAfter.Before(time.Now()) {
+		// Default to 60 seconds if no Retry-After header
+		c.retryAfter = time.Now().Add(60 * time.Second)
+	}
+	c.mu.Unlock()
+
+	return true
 }
 
 // Initialize performs OAuth authentication if needed
@@ -72,6 +182,10 @@ func (c *Client) GetMyShowsCalendar(ctx context.Context, days int) ([]CalendarSh
 		days = 33
 	}
 
+	if err := c.waitForRate(ctx, false); err != nil {
+		return nil, fmt.Errorf("rate limit: %w", err)
+	}
+
 	today := time.Now().Format("2006-01-02")
 	path := fmt.Sprintf("/calendars/my/shows/%s/%d", today, days)
 
@@ -98,6 +212,10 @@ func (c *Client) GetShowProgress(ctx context.Context, showID int) (*ShowProgress
 		return nil, fmt.Errorf("auth: %w", err)
 	}
 
+	if err := c.waitForRate(ctx, false); err != nil {
+		return nil, fmt.Errorf("rate limit: %w", err)
+	}
+
 	path := fmt.Sprintf("/shows/%d/progress/watched", showID)
 
 	var progress ShowProgress
@@ -121,6 +239,10 @@ func (c *Client) GetShowProgress(ctx context.Context, showID int) (*ShowProgress
 func (c *Client) GetWatchedShows(ctx context.Context) ([]WatchedShow, error) {
 	if err := c.ensureAuth(ctx); err != nil {
 		return nil, fmt.Errorf("auth: %w", err)
+	}
+
+	if err := c.waitForRate(ctx, false); err != nil {
+		return nil, fmt.Errorf("rate limit: %w", err)
 	}
 
 	var shows []WatchedShow
@@ -173,6 +295,10 @@ func (c *Client) GetShowSeasons(ctx context.Context, showID int) ([]SeasonSummar
 		return nil, fmt.Errorf("auth: %w", err)
 	}
 
+	if err := c.waitForRate(ctx, false); err != nil {
+		return nil, fmt.Errorf("rate limit: %w", err)
+	}
+
 	path := fmt.Sprintf("/shows/%d/seasons?extended=full", showID)
 
 	var seasons []SeasonSummary
@@ -196,6 +322,10 @@ func (c *Client) GetShowSeasons(ctx context.Context, showID int) ([]SeasonSummar
 func (c *Client) GetWatchedMovies(ctx context.Context) ([]WatchedMovie, error) {
 	if err := c.ensureAuth(ctx); err != nil {
 		return nil, fmt.Errorf("auth: %w", err)
+	}
+
+	if err := c.waitForRate(ctx, false); err != nil {
+		return nil, fmt.Errorf("rate limit: %w", err)
 	}
 
 	var movies []WatchedMovie

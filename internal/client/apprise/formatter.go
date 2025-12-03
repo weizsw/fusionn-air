@@ -65,34 +65,54 @@ func (f *SlackFormatter) FormatCleanupResults(removed, queued, skipped, errors i
 		sb.WriteString("⚠️ *DRY RUN MODE*\n\n")
 	}
 
-	// Categorize details
-	var removedItems []CleanupDetail
-	var queuedItems []CleanupDetail
-	var skippedItems []CleanupDetail
-	var errorItems []CleanupDetail
+	// Separate by media type first
+	seriesDetails := make(map[string][]CleanupDetail)
+	movieDetails := make(map[string][]CleanupDetail)
 
 	for _, d := range details {
-		switch d.Action {
-		case "removed", "dry_run_remove":
-			removedItems = append(removedItems, d)
-		case "queued":
-			queuedItems = append(queuedItems, d)
-		case "error":
-			errorItems = append(errorItems, d)
-		default:
-			skippedItems = append(skippedItems, d)
+		// Determine type by checking if it looks like a movie (has year in title typically)
+		// For now we categorize by action and will separate in summary
+		if d.MediaType == "movie" {
+			movieDetails[d.Action] = append(movieDetails[d.Action], d)
+		} else {
+			seriesDetails[d.Action] = append(seriesDetails[d.Action], d)
 		}
 	}
 
-	// Removed section
-	if len(removedItems) > 0 {
-		if dryRun {
-			sb.WriteString(fmt.Sprintf("*🗑️ WOULD REMOVE (%d):*\n", len(removedItems)))
-		} else {
-			sb.WriteString(fmt.Sprintf("*🗑️ REMOVED (%d):*\n", len(removedItems)))
+	// Format series section
+	f.formatMediaTypeSection(&sb, "📺 SERIES", seriesDetails, dryRun)
+
+	// Format movies section
+	f.formatMediaTypeSection(&sb, "🎬 MOVIES", movieDetails, dryRun)
+
+	return sb.String()
+}
+
+func (f *SlackFormatter) formatMediaTypeSection(sb *strings.Builder, header string, details map[string][]CleanupDetail, dryRun bool) {
+	// Check if there's anything to print
+	hasContent := false
+	for _, items := range details {
+		if len(items) > 0 {
+			hasContent = true
+			break
 		}
-		for _, item := range removedItems {
-			sb.WriteString(fmt.Sprintf("✅ %s", item.Title))
+	}
+	if !hasContent {
+		return
+	}
+
+	sb.WriteString(fmt.Sprintf("*%s*\n", header))
+
+	// Removed section
+	removed := append(details["removed"], details["dry_run_remove"]...)
+	if len(removed) > 0 {
+		if dryRun {
+			sb.WriteString(fmt.Sprintf("WOULD REMOVE (%d):\n", len(removed)))
+		} else {
+			sb.WriteString(fmt.Sprintf("REMOVED (%d):\n", len(removed)))
+		}
+		for _, item := range removed {
+			sb.WriteString(fmt.Sprintf("• %s", item.Title))
 			if item.SizeOnDisk != "" {
 				sb.WriteString(fmt.Sprintf(" [%s]", item.SizeOnDisk))
 			}
@@ -102,16 +122,16 @@ func (f *SlackFormatter) FormatCleanupResults(removed, queued, skipped, errors i
 	}
 
 	// Queued section
-	if len(queuedItems) > 0 {
-		sb.WriteString(fmt.Sprintf("*⏳ QUEUED FOR REMOVAL (%d):*\n", len(queuedItems)))
-		for _, item := range queuedItems {
-			sb.WriteString(fmt.Sprintf("⏳ %s", item.Title))
+	if queued := details["queued"]; len(queued) > 0 {
+		sb.WriteString(fmt.Sprintf("QUEUED (%d):\n", len(queued)))
+		for _, item := range queued {
+			sb.WriteString(fmt.Sprintf("• %s", item.Title))
 			if item.SizeOnDisk != "" {
 				sb.WriteString(fmt.Sprintf(" [%s]", item.SizeOnDisk))
 			}
 			sb.WriteString(fmt.Sprintf(" ← %s", item.Reason))
 			if item.DaysUntil > 0 {
-				sb.WriteString(fmt.Sprintf(" (removes in %d days)", item.DaysUntil))
+				sb.WriteString(fmt.Sprintf(" (in %d days)", item.DaysUntil))
 			}
 			sb.WriteString("\n")
 		}
@@ -119,23 +139,22 @@ func (f *SlackFormatter) FormatCleanupResults(removed, queued, skipped, errors i
 	}
 
 	// Skipped section
-	if len(skippedItems) > 0 {
-		sb.WriteString(fmt.Sprintf("*⏭️ SKIPPED (%d):*\n", len(skippedItems)))
-		for _, item := range skippedItems {
-			sb.WriteString(fmt.Sprintf("⏭️ %s ← %s\n", item.Title, item.Reason))
+	if skipped := details["skipped"]; len(skipped) > 0 {
+		sb.WriteString(fmt.Sprintf("SKIPPED (%d):\n", len(skipped)))
+		for _, item := range skipped {
+			sb.WriteString(fmt.Sprintf("• %s ← %s\n", item.Title, item.Reason))
 		}
 		sb.WriteString("\n")
 	}
 
 	// Errors section
-	if len(errorItems) > 0 {
-		sb.WriteString(fmt.Sprintf("*❌ ERRORS (%d):*\n", len(errorItems)))
-		for _, item := range errorItems {
-			sb.WriteString(fmt.Sprintf("❌ %s ← %s\n", item.Title, item.Reason))
+	if errors := details["error"]; len(errors) > 0 {
+		sb.WriteString(fmt.Sprintf("ERRORS (%d):\n", len(errors)))
+		for _, item := range errors {
+			sb.WriteString(fmt.Sprintf("• %s ← %s\n", item.Title, item.Reason))
 		}
+		sb.WriteString("\n")
 	}
-
-	return sb.String()
 }
 
 // WatcherDetail represents a single watcher result item
@@ -153,4 +172,5 @@ type CleanupDetail struct {
 	Reason     string
 	DaysUntil  int
 	SizeOnDisk string
+	MediaType  string // "series" or "movie"
 }
