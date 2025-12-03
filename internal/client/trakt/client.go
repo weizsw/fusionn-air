@@ -20,7 +20,6 @@ import (
 // After token refresh, stricter limits may apply temporarily
 const (
 	defaultGetRate  = 3                      // Conservative GET rate (3/sec vs 3.33 limit)
-	defaultPostRate = 1                      // POST/PUT/DELETE rate (1/sec)
 	burstSize       = 3                      // Conservative burst
 	minRequestDelay = 350 * time.Millisecond // Min delay between requests
 )
@@ -30,9 +29,8 @@ type Client struct {
 	auth     *AuthManager
 	clientID string
 
-	// Rate limiters
-	getLimiter  *rate.Limiter
-	postLimiter *rate.Limiter
+	// Rate limiter
+	getLimiter *rate.Limiter
 
 	// Adaptive rate limiting based on headers
 	mu          sync.Mutex
@@ -42,9 +40,8 @@ type Client struct {
 
 func NewClient(cfg config.TraktConfig) *Client {
 	c := &Client{
-		clientID:    cfg.ClientID,
-		getLimiter:  rate.NewLimiter(rate.Limit(defaultGetRate), burstSize),
-		postLimiter: rate.NewLimiter(rate.Limit(defaultPostRate), burstSize),
+		clientID:   cfg.ClientID,
+		getLimiter: rate.NewLimiter(rate.Limit(defaultGetRate), burstSize),
 	}
 
 	client := resty.New().
@@ -94,7 +91,7 @@ func (c *Client) handleRateLimitHeaders(resp *resty.Response) {
 }
 
 // waitForRate waits for rate limiter and any retry-after period
-func (c *Client) waitForRate(ctx context.Context, isPost bool) error {
+func (c *Client) waitForRate(ctx context.Context, _ bool) error {
 	c.mu.Lock()
 	retryAfter := c.retryAfter
 	lastReq := c.lastRequest
@@ -116,13 +113,8 @@ func (c *Client) waitForRate(ctx context.Context, isPost bool) error {
 		time.Sleep(minRequestDelay - elapsed)
 	}
 
-	// Use token bucket rate limiter
-	limiter := c.getLimiter
-	if isPost {
-		limiter = c.postLimiter
-	}
-
-	if err := limiter.Wait(ctx); err != nil {
+	// Use token bucket rate limiter (GET only for now)
+	if err := c.getLimiter.Wait(ctx); err != nil {
 		return err
 	}
 
@@ -131,23 +123,6 @@ func (c *Client) waitForRate(ctx context.Context, isPost bool) error {
 	c.mu.Unlock()
 
 	return nil
-}
-
-// handleRateLimitResponse checks if we got a 429 and waits appropriately
-func (c *Client) handleRateLimitResponse(resp *resty.Response) bool {
-	if resp.StatusCode() != 429 {
-		return false
-	}
-
-	// Already handled by OnAfterResponse, but ensure we have a wait time
-	c.mu.Lock()
-	if c.retryAfter.Before(time.Now()) {
-		// Default to 60 seconds if no Retry-After header
-		c.retryAfter = time.Now().Add(60 * time.Second)
-	}
-	c.mu.Unlock()
-
-	return true
 }
 
 // Initialize performs OAuth authentication if needed

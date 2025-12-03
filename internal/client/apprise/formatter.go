@@ -101,37 +101,38 @@ func (f *SlackFormatter) formatMediaTypeSection(sb *strings.Builder, header stri
 		return
 	}
 
-	sb.WriteString(fmt.Sprintf("*%s*\n", header))
+	fmt.Fprintf(sb, "*%s*\n", header)
 
 	// Removed section
-	removed := append(details["removed"], details["dry_run_remove"]...)
+	removed := details["removed"]
+	removed = append(removed, details["dry_run_remove"]...)
 	if len(removed) > 0 {
 		if dryRun {
-			sb.WriteString(fmt.Sprintf("WOULD REMOVE (%d):\n", len(removed)))
+			fmt.Fprintf(sb, "WOULD REMOVE (%d):\n", len(removed))
 		} else {
-			sb.WriteString(fmt.Sprintf("REMOVED (%d):\n", len(removed)))
+			fmt.Fprintf(sb, "REMOVED (%d):\n", len(removed))
 		}
 		for _, item := range removed {
-			sb.WriteString(fmt.Sprintf("• %s", item.Title))
+			fmt.Fprintf(sb, "• %s", item.Title)
 			if item.SizeOnDisk != "" {
-				sb.WriteString(fmt.Sprintf(" [%s]", item.SizeOnDisk))
+				fmt.Fprintf(sb, " [%s]", item.SizeOnDisk)
 			}
-			sb.WriteString(fmt.Sprintf(" ← %s\n", item.Reason))
+			fmt.Fprintf(sb, " ← %s\n", item.Reason)
 		}
 		sb.WriteString("\n")
 	}
 
 	// Queued section
 	if queued := details["queued"]; len(queued) > 0 {
-		sb.WriteString(fmt.Sprintf("QUEUED (%d):\n", len(queued)))
+		fmt.Fprintf(sb, "QUEUED (%d):\n", len(queued))
 		for _, item := range queued {
-			sb.WriteString(fmt.Sprintf("• %s", item.Title))
+			fmt.Fprintf(sb, "• %s", item.Title)
 			if item.SizeOnDisk != "" {
-				sb.WriteString(fmt.Sprintf(" [%s]", item.SizeOnDisk))
+				fmt.Fprintf(sb, " [%s]", item.SizeOnDisk)
 			}
-			sb.WriteString(fmt.Sprintf(" ← %s", item.Reason))
+			fmt.Fprintf(sb, " ← %s", item.Reason)
 			if item.DaysUntil > 0 {
-				sb.WriteString(fmt.Sprintf(" (in %d days)", item.DaysUntil))
+				fmt.Fprintf(sb, " (in %d days)", item.DaysUntil)
 			}
 			sb.WriteString("\n")
 		}
@@ -140,18 +141,18 @@ func (f *SlackFormatter) formatMediaTypeSection(sb *strings.Builder, header stri
 
 	// Skipped section
 	if skipped := details["skipped"]; len(skipped) > 0 {
-		sb.WriteString(fmt.Sprintf("SKIPPED (%d):\n", len(skipped)))
+		fmt.Fprintf(sb, "SKIPPED (%d):\n", len(skipped))
 		for _, item := range skipped {
-			sb.WriteString(fmt.Sprintf("• %s ← %s\n", item.Title, item.Reason))
+			fmt.Fprintf(sb, "• %s ← %s\n", item.Title, item.Reason)
 		}
 		sb.WriteString("\n")
 	}
 
 	// Errors section
 	if errors := details["error"]; len(errors) > 0 {
-		sb.WriteString(fmt.Sprintf("ERRORS (%d):\n", len(errors)))
+		fmt.Fprintf(sb, "ERRORS (%d):\n", len(errors))
 		for _, item := range errors {
-			sb.WriteString(fmt.Sprintf("• %s ← %s\n", item.Title, item.Reason))
+			fmt.Fprintf(sb, "• %s ← %s\n", item.Title, item.Reason)
 		}
 		sb.WriteString("\n")
 	}

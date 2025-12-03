@@ -62,7 +62,8 @@ func (s *Service) printMediaSection(header string, results map[string][]MediaRes
 	logger.Infof("── %s ──", header)
 
 	// Removed items
-	removed := append(results["removed"], results["dry_run_remove"]...)
+	removed := results["removed"]
+	removed = append(removed, results["dry_run_remove"]...)
 	if len(removed) > 0 {
 		if s.dryRun {
 			logger.Warnf("  WOULD REMOVE (%d):", len(removed))
