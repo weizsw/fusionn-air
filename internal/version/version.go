@@ -9,7 +9,7 @@ import (
 
 // Version holds the current build version. Override with
 // -ldflags "-X github.com/fusionn-air/internal/version.Version=v1.2.3".
-var Version = "v1.0.4"
+var Version = "v1.0.5"
 
 const (
 	separator = "────────────────────────────────────────────────────────────"
