@@ -9,7 +9,28 @@ env:
   IMAGE_NAME: fusionn-air
 
 jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Get version
+        id: version
+        run: echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          draft: false
+
   build-and-push:
+    needs: release
     runs-on: ubuntu-latest
     permissions:
       contents: read
