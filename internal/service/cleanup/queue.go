@@ -10,13 +10,13 @@ import (
 
 // QueueItem represents any media item marked for removal
 type QueueItem struct {
-	ID           int        `json:"id"`                      // Sonarr/Radarr/etc ID
-	ExternalID   int        `json:"external_id"`             // TVDB for shows, TMDB for movies
-	Title        string     `json:"title"`
-	MarkedAt     time.Time  `json:"marked_at"`
+	ID            int        `json:"id"`          // Sonarr/Radarr/etc ID
+	ExternalID    int        `json:"external_id"` // TVDB for shows, TMDB for movies
+	Title         string     `json:"title"`
+	MarkedAt      time.Time  `json:"marked_at"`
 	UnmonitoredAt *time.Time `json:"unmonitored_at,omitempty"` // When item was unmonitored
-	Reason       string     `json:"reason"`
-	SizeOnDisk   int64      `json:"size_on_disk"`
+	Reason        string     `json:"reason"`
+	SizeOnDisk    int64      `json:"size_on_disk"`
 }
 
 // Queue manages the cleanup queue persistence

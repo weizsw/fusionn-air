@@ -49,7 +49,7 @@ func (s *Service) processSeries(ctx context.Context, result *ProcessingResult, c
 
 	// Process each series
 	for _, ser := range series {
-		res := s.processOneSeries(ctx, &ser, watchedByTvdb, queue, cfg, dryRun)
+		res := s.processOneSeries(ctx, &ser, watchedByTvdb, queue, cfg)
 		// Unmonitor if newly queued
 		if res.Action == "queued" && res.Reason != "" && strings.HasSuffix(res.Reason, "added to queue") {
 			s.unmonitorSeries(ctx, ser.ID, ser.Title, queue, dryRun)
@@ -61,7 +61,7 @@ func (s *Service) processSeries(ctx context.Context, result *ProcessingResult, c
 	s.processSeriesRemovalQueue(ctx, result, queue, cfg, dryRun)
 }
 
-func (s *Service) processOneSeries(ctx context.Context, ser *sonarr.Series, watchedByTvdb map[int]*trakt.WatchedShow, queue *Queue, cfg *config.Config, dryRun bool) MediaResult {
+func (s *Service) processOneSeries(ctx context.Context, ser *sonarr.Series, watchedByTvdb map[int]*trakt.WatchedShow, queue *Queue, cfg *config.Config) MediaResult {
 	res := MediaResult{
 		Type:       MediaTypeSeries,
 		Title:      ser.Title,
