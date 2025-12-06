@@ -8,11 +8,12 @@ import (
 
 	"github.com/fusionn-air/internal/client/sonarr"
 	"github.com/fusionn-air/internal/client/trakt"
+	"github.com/fusionn-air/internal/config"
 	"github.com/fusionn-air/pkg/logger"
 )
 
 // processSeries handles TV series cleanup using Sonarr
-func (s *Service) processSeries(ctx context.Context, result *ProcessingResult) {
+func (s *Service) processSeries(ctx context.Context, result *ProcessingResult, cfg *config.Config, dryRun bool) {
 	if s.sonarr == nil {
 		logger.Debug("Sonarr client not configured, skipping series cleanup")
 		return
@@ -48,15 +49,19 @@ func (s *Service) processSeries(ctx context.Context, result *ProcessingResult) {
 
 	// Process each series
 	for _, ser := range series {
-		res := s.processOneSeries(ctx, &ser, watchedByTvdb, queue)
+		res := s.processOneSeries(ctx, &ser, watchedByTvdb, queue, cfg, dryRun)
+		// Unmonitor if newly queued
+		if res.Action == "queued" && res.Reason != "" && strings.HasSuffix(res.Reason, "added to queue") {
+			s.unmonitorSeries(ctx, ser.ID, ser.Title, queue, dryRun)
+		}
 		result.AddResult(res)
 	}
 
 	// Process removal queue
-	s.processSeriesRemovalQueue(ctx, result, queue)
+	s.processSeriesRemovalQueue(ctx, result, queue, cfg, dryRun)
 }
 
-func (s *Service) processOneSeries(ctx context.Context, ser *sonarr.Series, watchedByTvdb map[int]*trakt.WatchedShow, queue *Queue) MediaResult {
+func (s *Service) processOneSeries(ctx context.Context, ser *sonarr.Series, watchedByTvdb map[int]*trakt.WatchedShow, queue *Queue, cfg *config.Config, dryRun bool) MediaResult {
 	res := MediaResult{
 		Type:       MediaTypeSeries,
 		Title:      ser.Title,
@@ -65,7 +70,7 @@ func (s *Service) processOneSeries(ctx context.Context, ser *sonarr.Series, watc
 	}
 
 	// Check exclusions
-	if s.isExcluded(ser.Title) {
+	if isExcluded(ser.Title, cfg.Cleanup.Exclusions) {
 		res.Action = "skipped"
 		res.Reason = "in exclusion list"
 		return res
@@ -136,7 +141,7 @@ func (s *Service) processOneSeries(ctx context.Context, ser *sonarr.Series, watc
 	if queue.IsQueued(ser.ID) {
 		queueItem := queue.Get(ser.ID)
 		daysInQueue := int(time.Since(queueItem.MarkedAt).Hours() / 24)
-		daysUntil := s.cfg.DelayDays - daysInQueue
+		daysUntil := cfg.Cleanup.DelayDays - daysInQueue
 		if daysUntil < 0 {
 			daysUntil = 0
 		}
@@ -158,12 +163,12 @@ func (s *Service) processOneSeries(ctx context.Context, ser *sonarr.Series, watc
 
 	res.Action = "queued"
 	res.Reason = watchedReason + " - added to queue"
-	res.DaysUntil = s.cfg.DelayDays
+	res.DaysUntil = cfg.Cleanup.DelayDays
 	return res
 }
 
-func (s *Service) processSeriesRemovalQueue(ctx context.Context, result *ProcessingResult, queue *Queue) {
-	ready := queue.GetReadyForRemoval(s.cfg.DelayDays)
+func (s *Service) processSeriesRemovalQueue(ctx context.Context, result *ProcessingResult, queue *Queue, cfg *config.Config, dryRun bool) {
+	ready := queue.GetReadyForRemoval(cfg.Cleanup.DelayDays)
 	if len(ready) == 0 {
 		return
 	}
@@ -183,7 +188,7 @@ func (s *Service) processSeriesRemovalQueue(ctx context.Context, result *Process
 			continue
 		}
 
-		if s.dryRun {
+		if dryRun {
 			logger.Warnf("🗑️  [DRY RUN] Would delete: %s (%s)", item.Title, sonarr.FormatSize(item.SizeOnDisk))
 			result.AddResult(MediaResult{
 				Type:       MediaTypeSeries,
@@ -339,4 +344,19 @@ func getSeasonsWithFiles(ser *sonarr.Series) []int {
 		}
 	}
 	return seasons
+}
+
+// unmonitorSeries unmonitors a series in Sonarr when it's added to the cleanup queue
+func (s *Service) unmonitorSeries(ctx context.Context, seriesID int, title string, queue *Queue, dryRun bool) {
+	if dryRun {
+		logger.Warnf("🔕 [DRY RUN] Would unmonitor series: %s", title)
+		return
+	}
+
+	if err := s.sonarr.UnmonitorSeries(ctx, seriesID); err != nil {
+		logger.Warnf("⚠️  Failed to unmonitor %s: %v", title, err)
+		return
+	}
+
+	queue.MarkUnmonitored(seriesID)
 }

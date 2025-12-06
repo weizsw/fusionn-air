@@ -19,8 +19,7 @@ type Service struct {
 	trakt     *trakt.Client
 	overseerr *overseerr.Client
 	apprise   *apprise.Client
-	cfg       config.WatcherConfig
-	dryRun    bool
+	cfgMgr    *config.Manager
 
 	mu          sync.RWMutex
 	lastRun     time.Time
@@ -39,18 +38,22 @@ type ProcessResult struct {
 	Error     string    `json:"error,omitempty"`
 }
 
-func NewService(traktClient *trakt.Client, overseerrClient *overseerr.Client, appriseClient *apprise.Client, cfg config.WatcherConfig, dryRun bool) *Service {
+func NewService(traktClient *trakt.Client, overseerrClient *overseerr.Client, appriseClient *apprise.Client, cfgMgr *config.Manager) *Service {
 	return &Service{
 		trakt:     traktClient,
 		overseerr: overseerrClient,
 		apprise:   appriseClient,
-		cfg:       cfg,
-		dryRun:    dryRun,
+		cfgMgr:    cfgMgr,
 	}
 }
 
 // ProcessCalendar checks the calendar and requests new seasons as needed
 func (s *Service) ProcessCalendar(ctx context.Context) ([]ProcessResult, error) {
+	// Get fresh config for this run (supports hot-reload)
+	cfg := s.cfgMgr.Get()
+	dryRun := cfg.Scheduler.DryRun
+	calendarDays := cfg.Watcher.CalendarDays
+
 	startTime := time.Now()
 
 	logger.Info("")
@@ -58,13 +61,13 @@ func (s *Service) ProcessCalendar(ctx context.Context) ([]ProcessResult, error) 
 	logger.Info("║              CALENDAR PROCESSING STARTED                     ║")
 	logger.Info("╚══════════════════════════════════════════════════════════════╝")
 
-	if s.dryRun {
+	if dryRun {
 		logger.Warn("⚠️  DRY RUN MODE - No actual requests will be made")
 	}
 
 	// Get upcoming shows from Trakt calendar
-	logger.Infof("📅 Fetching calendar for next %d days...", s.cfg.CalendarDays)
-	calendarItems, err := s.trakt.GetMyShowsCalendar(ctx, s.cfg.CalendarDays)
+	logger.Infof("📅 Fetching calendar for next %d days...", calendarDays)
+	calendarItems, err := s.trakt.GetMyShowsCalendar(ctx, calendarDays)
 	if err != nil {
 		logger.Errorf("❌ Failed to get calendar: %v", err)
 		return nil, fmt.Errorf("getting calendar: %w", err)
@@ -84,7 +87,7 @@ func (s *Service) ProcessCalendar(ctx context.Context) ([]ProcessResult, error) 
 
 	// Process each show/season silently
 	for _, item := range showSeasons {
-		result := s.processShow(ctx, item)
+		result := s.processShow(ctx, item, dryRun)
 		results = append(results, result)
 	}
 
@@ -95,16 +98,16 @@ func (s *Service) ProcessCalendar(ctx context.Context) ([]ProcessResult, error) 
 	s.mu.Unlock()
 
 	// Print summary
-	s.printSummary(results, startTime)
+	s.printSummary(results, startTime, dryRun)
 
 	// Send notification
-	s.sendNotification(ctx, results)
+	s.sendNotification(ctx, results, dryRun)
 
 	return results, nil
 }
 
 // printSummary prints a grouped summary of results
-func (s *Service) printSummary(results []ProcessResult, startTime time.Time) {
+func (s *Service) printSummary(results []ProcessResult, startTime time.Time, dryRun bool) {
 	var willRequest []string
 	var willSkip []string
 	var errors []string
@@ -127,13 +130,13 @@ func (s *Service) printSummary(results []ProcessResult, startTime time.Time) {
 
 	if len(willRequest) > 0 {
 		logger.Info("")
-		if s.dryRun {
+		if dryRun {
 			logger.Warnf("📥 WOULD REQUEST (%d):", len(willRequest))
 		} else {
 			logger.Infof("📥 REQUESTED (%d):", len(willRequest))
 		}
 		for _, line := range willRequest {
-			if s.dryRun {
+			if dryRun {
 				logger.Warn(line)
 			} else {
 				logger.Info(line)
@@ -164,7 +167,7 @@ func (s *Service) printSummary(results []ProcessResult, startTime time.Time) {
 }
 
 // sendNotification sends a notification with watcher results
-func (s *Service) sendNotification(ctx context.Context, results []ProcessResult) {
+func (s *Service) sendNotification(ctx context.Context, results []ProcessResult, dryRun bool) {
 	if s.apprise == nil || !s.apprise.IsEnabled() {
 		return
 	}
@@ -196,7 +199,7 @@ func (s *Service) sendNotification(ctx context.Context, results []ProcessResult)
 	}
 
 	title := "📺 Watcher Results"
-	if s.dryRun {
+	if dryRun {
 		title = "📺 Watcher Results (DRY RUN)"
 	}
 
@@ -242,7 +245,7 @@ func (s *Service) groupByShowAndSeason(items []trakt.CalendarShow) map[string]ca
 	return result
 }
 
-func (s *Service) processShow(ctx context.Context, item calendarItem) ProcessResult {
+func (s *Service) processShow(ctx context.Context, item calendarItem, dryRun bool) ProcessResult {
 	result := ProcessResult{
 		ShowTitle: item.show.Title,
 		ShowTMDB:  item.show.IDs.TMDB,
@@ -274,7 +277,7 @@ func (s *Service) processShow(ctx context.Context, item calendarItem) ProcessRes
 	}
 
 	// Determine if we should request this season based on watch progress
-	shouldRequest, reason := s.shouldRequestSeason(progress, seasons, item.season)
+	shouldRequest, reason := shouldRequestSeason(progress, seasons, item.season)
 	if !shouldRequest {
 		result.Action = "skipped"
 		result.Reason = reason
@@ -303,7 +306,7 @@ func (s *Service) processShow(ctx context.Context, item calendarItem) ProcessRes
 	}
 
 	// In dry-run mode, don't actually request
-	if s.dryRun {
+	if dryRun {
 		result.Action = "dry_run"
 		result.Reason = reason
 		return result
@@ -323,7 +326,7 @@ func (s *Service) processShow(ctx context.Context, item calendarItem) ProcessRes
 }
 
 // shouldRequestSeason determines if a season should be requested based on watch progress
-func (s *Service) shouldRequestSeason(progress *trakt.ShowProgress, seasons []trakt.SeasonSummary, targetSeason int) (bool, string) {
+func shouldRequestSeason(progress *trakt.ShowProgress, seasons []trakt.SeasonSummary, targetSeason int) (bool, string) {
 	// Build map of total episode counts per season
 	totalEps := make(map[int]int)
 	for _, s := range seasons {

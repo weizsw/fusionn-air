@@ -44,6 +44,7 @@ func main() {
 	if err != nil {
 		logger.Fatalf("❌ Config error: %v", err)
 	}
+	defer cfgMgr.Stop()
 	cfg := cfgMgr.Get()
 
 	if cfg.Scheduler.DryRun {
@@ -98,7 +99,7 @@ func main() {
 			logger.Info("✅  Radarr configured")
 		}
 
-		cleanupService = cleanup.NewService(sonarrClient, radarrClient, traktClient, appriseClient, cfg.Cleanup, cfg.Scheduler.DryRun)
+		cleanupService = cleanup.NewService(sonarrClient, radarrClient, traktClient, appriseClient, cfgMgr)
 		logger.Infof("🧹 Cleanup: enabled (delay=%d days)", cfg.Cleanup.DelayDays)
 	} else {
 		logger.Info("🧹 Cleanup: disabled")
@@ -107,7 +108,7 @@ func main() {
 	// Initialize watcher service
 	var watcherService *watcher.Service
 	if cfg.Watcher.Enabled {
-		watcherService = watcher.NewService(traktClient, overseerrClient, appriseClient, cfg.Watcher, cfg.Scheduler.DryRun)
+		watcherService = watcher.NewService(traktClient, overseerrClient, appriseClient, cfgMgr)
 		logger.Infof("👁️  Watcher: enabled (calendar_days=%d)", cfg.Watcher.CalendarDays)
 	} else {
 		logger.Info("👁️  Watcher: disabled")

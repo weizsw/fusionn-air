@@ -75,15 +75,21 @@ type AppriseConfig struct {
 	Tag     string `mapstructure:"tag"`      // Tag to filter services (default: all)
 }
 
-// ChangeCallback is called when config changes. Receives old and new config.
-type ChangeCallback func(old, new *Config)
-
-// Manager handles config loading and hot-reload.
+// Manager handles config loading and hot-reload via polling.
+// Services should call Get() at execution time to get fresh config values.
+//
+// Hot-reloadable settings (no restart needed):
+//   - scheduler.dry_run, watcher.calendar_days
+//   - cleanup.delay_days, cleanup.exclusions
+//
+// Requires restart:
+//   - server.port, scheduler.cron
+//   - All API credentials (trakt, overseerr, sonarr, radarr, apprise)
+//   - All *.enabled toggles
 type Manager struct {
-	mu        sync.RWMutex
-	cfg       *Config
-	callbacks []ChangeCallback
-	stop      chan struct{}
+	mu   sync.RWMutex
+	cfg  *Config
+	stop chan struct{}
 
 	// Polling state
 	path        string
@@ -132,17 +138,11 @@ func NewManager(path string) (*Manager, error) {
 }
 
 // Get returns the current config (thread-safe).
+// Call this at execution time to get fresh config values.
 func (m *Manager) Get() *Config {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.cfg
-}
-
-// OnChange registers a callback for config changes.
-func (m *Manager) OnChange(cb ChangeCallback) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.callbacks = append(m.callbacks, cb)
 }
 
 // Stop stops the config polling goroutine.
@@ -187,7 +187,7 @@ func (m *Manager) pollForChanges(interval time.Duration) {
 	}
 }
 
-// reload re-reads config and notifies subscribers.
+// reload re-reads config and logs what changed.
 func (m *Manager) reload() {
 	var newCfg Config
 	if err := viper.Unmarshal(&newCfg); err != nil {
@@ -198,16 +198,11 @@ func (m *Manager) reload() {
 	m.mu.Lock()
 	oldCfg := m.cfg
 	m.cfg = &newCfg
-	callbacks := m.callbacks
 	m.mu.Unlock()
 
 	// Log what changed
 	logChanges(oldCfg, &newCfg, "")
-
-	// Notify subscribers outside lock
-	for _, cb := range callbacks {
-		cb(oldCfg, &newCfg)
-	}
+	logger.Info("✅ Config reloaded (changes take effect on next run)")
 }
 
 // logChanges logs field-level differences between old and new config.
@@ -253,7 +248,7 @@ func logChanges(old, cur any, prefix string) {
 	}
 }
 
-// formatValue formats a reflect.Value for logging, masking sensitive fields.
+// formatValue formats a reflect.Value for logging.
 func formatValue(v reflect.Value) string {
 	if v.Kind() == reflect.Slice {
 		return fmt.Sprintf("%v", v.Interface())

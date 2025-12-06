@@ -111,6 +111,41 @@ func (c *Client) DeleteMovie(ctx context.Context, movieID int, deleteFiles bool)
 	return nil
 }
 
+// UnmonitorMovie sets a movie to unmonitored in Radarr
+func (c *Client) UnmonitorMovie(ctx context.Context, movieID int) error {
+	// Get current movie data
+	movie, err := c.GetMovie(ctx, movieID)
+	if err != nil {
+		return fmt.Errorf("getting movie for unmonitor: %w", err)
+	}
+	if movie == nil {
+		return nil // Already gone
+	}
+
+	if !movie.Monitored {
+		return nil // Already unmonitored
+	}
+
+	// Set monitored to false
+	movie.Monitored = false
+
+	resp, err := c.client.R().
+		SetContext(ctx).
+		SetBody(movie).
+		Put(fmt.Sprintf("/movie/%d", movieID))
+
+	if err != nil {
+		return fmt.Errorf("unmonitoring movie: %w", err)
+	}
+
+	if resp.IsError() {
+		return fmt.Errorf("API error: status=%d body=%s", resp.StatusCode(), resp.String())
+	}
+
+	logger.Infof("🔕 Unmonitored movie ID=%d (%s)", movieID, movie.Title)
+	return nil
+}
+
 // FormatSize formats bytes to human readable string
 func FormatSize(bytes int64) string {
 	const unit = 1024

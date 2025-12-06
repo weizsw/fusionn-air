@@ -131,6 +131,41 @@ func (c *Client) GetEpisodes(ctx context.Context, seriesID int) ([]Episode, erro
 	return episodes, nil
 }
 
+// UnmonitorSeries sets a series to unmonitored in Sonarr
+func (c *Client) UnmonitorSeries(ctx context.Context, seriesID int) error {
+	// Get current series data
+	series, err := c.GetSeries(ctx, seriesID)
+	if err != nil {
+		return fmt.Errorf("getting series for unmonitor: %w", err)
+	}
+	if series == nil {
+		return nil // Already gone
+	}
+
+	if !series.Monitored {
+		return nil // Already unmonitored
+	}
+
+	// Set monitored to false
+	series.Monitored = false
+
+	resp, err := c.client.R().
+		SetContext(ctx).
+		SetBody(series).
+		Put(fmt.Sprintf("/series/%d", seriesID))
+
+	if err != nil {
+		return fmt.Errorf("unmonitoring series: %w", err)
+	}
+
+	if resp.IsError() {
+		return fmt.Errorf("API error: status=%d body=%s", resp.StatusCode(), resp.String())
+	}
+
+	logger.Infof("🔕 Unmonitored series ID=%d (%s)", seriesID, series.Title)
+	return nil
+}
+
 // IsSeriesEnded checks if a series has ended (not continuing)
 func IsSeriesEnded(series *Series) bool {
 	return series.Status == StatusEnded
