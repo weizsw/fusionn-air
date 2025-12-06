@@ -10,12 +10,13 @@ import (
 
 // QueueItem represents any media item marked for removal
 type QueueItem struct {
-	ID         int       `json:"id"`          // Sonarr/Radarr/etc ID
-	ExternalID int       `json:"external_id"` // TVDB for shows, TMDB for movies
-	Title      string    `json:"title"`
-	MarkedAt   time.Time `json:"marked_at"`
-	Reason     string    `json:"reason"`
-	SizeOnDisk int64     `json:"size_on_disk"`
+	ID           int        `json:"id"`                      // Sonarr/Radarr/etc ID
+	ExternalID   int        `json:"external_id"`             // TVDB for shows, TMDB for movies
+	Title        string     `json:"title"`
+	MarkedAt     time.Time  `json:"marked_at"`
+	UnmonitoredAt *time.Time `json:"unmonitored_at,omitempty"` // When item was unmonitored
+	Reason       string     `json:"reason"`
+	SizeOnDisk   int64      `json:"size_on_disk"`
 }
 
 // Queue manages the cleanup queue persistence
@@ -62,6 +63,18 @@ func (q *Queue) Get(id int) *QueueItem {
 	defer q.mu.RUnlock()
 
 	return q.items[id]
+}
+
+// MarkUnmonitored sets the unmonitored timestamp for a queue item
+func (q *Queue) MarkUnmonitored(id int) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	if item, exists := q.items[id]; exists {
+		now := time.Now()
+		item.UnmonitoredAt = &now
+		_ = q.save()
+	}
 }
 
 // GetAll returns all items in the queue

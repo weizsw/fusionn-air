@@ -9,7 +9,7 @@ import (
 	"github.com/fusionn-air/pkg/logger"
 )
 
-func (s *Service) printSummary(result *ProcessingResult, startTime time.Time) {
+func (s *Service) printSummary(result *ProcessingResult, startTime time.Time, dryRun bool) {
 	// Separate results by media type
 	seriesResults := make(map[string][]MediaResult)
 	movieResults := make(map[string][]MediaResult)
@@ -29,10 +29,10 @@ func (s *Service) printSummary(result *ProcessingResult, startTime time.Time) {
 	logger.Info("└──────────────────────────────────────────────────────────────┘")
 
 	// Print Series section
-	s.printMediaSection("📺 SERIES", seriesResults)
+	printMediaSection("📺 SERIES", seriesResults, dryRun)
 
 	// Print Movies section
-	s.printMediaSection("🎬 MOVIES", movieResults)
+	printMediaSection("🎬 MOVIES", movieResults, dryRun)
 
 	// Print per-type stats
 	logger.Info("")
@@ -45,7 +45,7 @@ func (s *Service) printSummary(result *ProcessingResult, startTime time.Time) {
 	logger.Info("")
 }
 
-func (s *Service) printMediaSection(header string, results map[string][]MediaResult) {
+func printMediaSection(header string, results map[string][]MediaResult, dryRun bool) {
 	// Check if there's anything to print
 	hasContent := false
 	for _, items := range results {
@@ -65,7 +65,7 @@ func (s *Service) printMediaSection(header string, results map[string][]MediaRes
 	removed := results["removed"]
 	removed = append(removed, results["dry_run_remove"]...)
 	if len(removed) > 0 {
-		if s.dryRun {
+		if dryRun {
 			logger.Warnf("  WOULD REMOVE (%d):", len(removed))
 		} else {
 			logger.Infof("  REMOVED (%d):", len(removed))
@@ -127,7 +127,7 @@ func formatTitle(r MediaResult) string {
 	return r.Title
 }
 
-func (s *Service) sendNotification(ctx context.Context, result *ProcessingResult) {
+func (s *Service) sendNotification(ctx context.Context, result *ProcessingResult, dryRun bool) {
 	if s.apprise == nil || !s.apprise.IsEnabled() {
 		return
 	}
@@ -156,11 +156,11 @@ func (s *Service) sendNotification(ctx context.Context, result *ProcessingResult
 	}
 
 	title := "🧹 Cleanup Results"
-	if s.dryRun {
+	if dryRun {
 		title = "🧹 Cleanup Results (DRY RUN)"
 	}
 
-	body := formatter.FormatCleanupResults(totalRemoved, totalQueued, totalSkipped, result.Errors, details, s.dryRun)
+	body := formatter.FormatCleanupResults(totalRemoved, totalQueued, totalSkipped, result.Errors, details, dryRun)
 
 	notifyType := "info"
 	if totalRemoved > 0 {

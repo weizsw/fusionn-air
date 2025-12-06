@@ -3,15 +3,17 @@ package cleanup
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/fusionn-air/internal/client/radarr"
 	"github.com/fusionn-air/internal/client/trakt"
+	"github.com/fusionn-air/internal/config"
 	"github.com/fusionn-air/pkg/logger"
 )
 
 // processMovies handles movie cleanup using Radarr
-func (s *Service) processMovies(ctx context.Context, result *ProcessingResult) {
+func (s *Service) processMovies(ctx context.Context, result *ProcessingResult, cfg *config.Config, dryRun bool) {
 	if s.radarr == nil {
 		logger.Debug("Radarr client not configured, skipping movie cleanup")
 		return
@@ -47,15 +49,19 @@ func (s *Service) processMovies(ctx context.Context, result *ProcessingResult) {
 
 	// Process each movie
 	for _, movie := range movies {
-		res := s.processOneMovie(&movie, watchedByTmdb, queue)
+		res := s.processOneMovie(&movie, watchedByTmdb, queue, cfg)
+		// Unmonitor if newly queued
+		if res.Action == "queued" && strings.HasSuffix(res.Reason, "added to queue") {
+			s.unmonitorMovie(ctx, movie.ID, movie.Title, queue, dryRun)
+		}
 		result.AddResult(res)
 	}
 
 	// Process removal queue
-	s.processMovieRemovalQueue(ctx, result, queue)
+	s.processMovieRemovalQueue(ctx, result, queue, cfg, dryRun)
 }
 
-func (s *Service) processOneMovie(movie *radarr.Movie, watchedByTmdb map[int]*trakt.WatchedMovie, queue *Queue) MediaResult {
+func (s *Service) processOneMovie(movie *radarr.Movie, watchedByTmdb map[int]*trakt.WatchedMovie, queue *Queue, cfg *config.Config) MediaResult {
 	res := MediaResult{
 		Type:       MediaTypeMovie,
 		Title:      movie.Title,
@@ -65,7 +71,7 @@ func (s *Service) processOneMovie(movie *radarr.Movie, watchedByTmdb map[int]*tr
 	}
 
 	// Check exclusions
-	if s.isExcluded(movie.Title) {
+	if isExcluded(movie.Title, cfg.Cleanup.Exclusions) {
 		res.Action = "skipped"
 		res.Reason = "in exclusion list"
 		return res
@@ -104,7 +110,7 @@ func (s *Service) processOneMovie(movie *radarr.Movie, watchedByTmdb map[int]*tr
 	if queue.IsQueued(movie.ID) {
 		queueItem := queue.Get(movie.ID)
 		daysInQueue := int(time.Since(queueItem.MarkedAt).Hours() / 24)
-		daysUntil := s.cfg.DelayDays - daysInQueue
+		daysUntil := cfg.Cleanup.DelayDays - daysInQueue
 		if daysUntil < 0 {
 			daysUntil = 0
 		}
@@ -126,12 +132,12 @@ func (s *Service) processOneMovie(movie *radarr.Movie, watchedByTmdb map[int]*tr
 
 	res.Action = "queued"
 	res.Reason = watchedReason + " - added to queue"
-	res.DaysUntil = s.cfg.DelayDays
+	res.DaysUntil = cfg.Cleanup.DelayDays
 	return res
 }
 
-func (s *Service) processMovieRemovalQueue(ctx context.Context, result *ProcessingResult, queue *Queue) {
-	ready := queue.GetReadyForRemoval(s.cfg.DelayDays)
+func (s *Service) processMovieRemovalQueue(ctx context.Context, result *ProcessingResult, queue *Queue, cfg *config.Config, dryRun bool) {
+	ready := queue.GetReadyForRemoval(cfg.Cleanup.DelayDays)
 	if len(ready) == 0 {
 		return
 	}
@@ -151,7 +157,7 @@ func (s *Service) processMovieRemovalQueue(ctx context.Context, result *Processi
 			continue
 		}
 
-		if s.dryRun {
+		if dryRun {
 			logger.Warnf("🗑️  [DRY RUN] Would delete: %s (%s)", item.Title, radarr.FormatSize(item.SizeOnDisk))
 			result.AddResult(MediaResult{
 				Type:       MediaTypeMovie,
@@ -186,4 +192,19 @@ func (s *Service) processMovieRemovalQueue(ctx context.Context, result *Processi
 
 		queue.Remove(item.ID)
 	}
+}
+
+// unmonitorMovie unmonitors a movie in Radarr when it's added to the cleanup queue
+func (s *Service) unmonitorMovie(ctx context.Context, movieID int, title string, queue *Queue, dryRun bool) {
+	if dryRun {
+		logger.Warnf("🔕 [DRY RUN] Would unmonitor movie: %s", title)
+		return
+	}
+
+	if err := s.radarr.UnmonitorMovie(ctx, movieID); err != nil {
+		logger.Warnf("⚠️  Failed to unmonitor %s: %v", title, err)
+		return
+	}
+
+	queue.MarkUnmonitored(movieID)
 }

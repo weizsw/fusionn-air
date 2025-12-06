@@ -31,8 +31,8 @@ type Service struct {
 	trakt   *trakt.Client
 	apprise *apprise.Client
 
-	cfg    config.CleanupConfig
-	dryRun bool
+	// Config manager for hot-reload support
+	cfgMgr *config.Manager
 
 	// Queues per media type - extensible
 	queues map[MediaType]*Queue
@@ -74,14 +74,13 @@ type MediaStats struct {
 	Skipped        int `json:"skipped"`
 }
 
-func NewService(sonarrClient *sonarr.Client, radarrClient *radarr.Client, traktClient *trakt.Client, appriseClient *apprise.Client, cfg config.CleanupConfig, dryRun bool) *Service {
+func NewService(sonarrClient *sonarr.Client, radarrClient *radarr.Client, traktClient *trakt.Client, appriseClient *apprise.Client, cfgMgr *config.Manager) *Service {
 	s := &Service{
 		sonarr:  sonarrClient,
 		radarr:  radarrClient,
 		trakt:   traktClient,
 		apprise: appriseClient,
-		cfg:     cfg,
-		dryRun:  dryRun,
+		cfgMgr:  cfgMgr,
 		queues:  make(map[MediaType]*Queue),
 	}
 
@@ -95,19 +94,23 @@ func NewService(sonarrClient *sonarr.Client, radarrClient *radarr.Client, traktC
 
 // ProcessCleanup runs the cleanup logic for all media types
 func (s *Service) ProcessCleanup(ctx context.Context) (*ProcessingResult, error) {
-	if !s.cfg.Enabled {
+	// Get fresh config for this run (supports hot-reload)
+	cfg := s.cfgMgr.Get()
+
+	if !cfg.Cleanup.Enabled {
 		logger.Debug("Cleanup is disabled, skipping")
 		return nil, nil
 	}
 
 	startTime := time.Now()
+	dryRun := cfg.Scheduler.DryRun
 
 	logger.Info("")
 	logger.Info("┌──────────────────────────────────────────────────────────────┐")
 	logger.Info("│               CLEANUP PROCESSING STARTED                     │")
 	logger.Info("└──────────────────────────────────────────────────────────────┘")
 
-	if s.dryRun {
+	if dryRun {
 		logger.Warn("⚠️  DRY RUN MODE - No actual deletions will be made")
 	}
 
@@ -116,9 +119,9 @@ func (s *Service) ProcessCleanup(ctx context.Context) (*ProcessingResult, error)
 	}
 
 	// Process each media type - add new processors here
-	s.processSeries(ctx, result)
-	s.processMovies(ctx, result)
-	// Add new processors: s.processAudiobooks(ctx, result)
+	s.processSeries(ctx, result, cfg, dryRun)
+	s.processMovies(ctx, result, cfg, dryRun)
+	// Add new processors: s.processAudiobooks(ctx, result, cfg, dryRun)
 
 	// Store results
 	s.mu.Lock()
@@ -127,8 +130,8 @@ func (s *Service) ProcessCleanup(ctx context.Context) (*ProcessingResult, error)
 	s.mu.Unlock()
 
 	// Print summary and send notification
-	s.printSummary(result, startTime)
-	s.sendNotification(ctx, result)
+	s.printSummary(result, startTime, dryRun)
+	s.sendNotification(ctx, result, dryRun)
 
 	return result, nil
 }
@@ -148,8 +151,8 @@ func (s *Service) GetAllQueues() []*QueueItem {
 }
 
 // isExcluded checks if a title is in the exclusion list (shared across all types)
-func (s *Service) isExcluded(title string) bool {
-	for _, exc := range s.cfg.Exclusions {
+func isExcluded(title string, exclusions []string) bool {
+	for _, exc := range exclusions {
 		if strings.EqualFold(exc, title) {
 			return true
 		}
