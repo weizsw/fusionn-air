@@ -76,6 +76,21 @@ func (s *Service) processOneSeries(ctx context.Context, ser *sonarr.Series, watc
 		return res
 	}
 
+	// Check if already in queue (before checking monitored status)
+	// This ensures queued items remain visible even after being unmonitored
+	if queue.IsQueued(ser.ID) {
+		queueItem := queue.Get(ser.ID)
+		daysInQueue := int(time.Since(queueItem.MarkedAt).Hours() / 24)
+		daysUntil := cfg.Cleanup.DelayDays - daysInQueue
+		if daysUntil < 0 {
+			daysUntil = 0
+		}
+		res.Action = "queued"
+		res.Reason = queueItem.Reason + " - queued for deletion (unmonitored)"
+		res.DaysUntil = daysUntil
+		return res
+	}
+
 	// Check if series is monitored
 	if !ser.Monitored {
 		res.Action = "skipped"
@@ -137,20 +152,6 @@ func (s *Service) processOneSeries(ctx context.Context, ser *sonarr.Series, watc
 	seasonsOnDisk := getSeasonsWithFiles(ser)
 	watchedReason := fmt.Sprintf("fully watched (S%s)", formatSeasons(seasonsOnDisk))
 
-	// Check if already in queue
-	if queue.IsQueued(ser.ID) {
-		queueItem := queue.Get(ser.ID)
-		daysInQueue := int(time.Since(queueItem.MarkedAt).Hours() / 24)
-		daysUntil := cfg.Cleanup.DelayDays - daysInQueue
-		if daysUntil < 0 {
-			daysUntil = 0
-		}
-		res.Action = "queued"
-		res.Reason = watchedReason
-		res.DaysUntil = daysUntil
-		return res
-	}
-
 	// Add to queue
 	queue.Add(&QueueItem{
 		ID:         ser.ID,
@@ -162,7 +163,7 @@ func (s *Service) processOneSeries(ctx context.Context, ser *sonarr.Series, watc
 	})
 
 	res.Action = "queued"
-	res.Reason = watchedReason + " - added to queue"
+	res.Reason = watchedReason + " - queued for deletion (unmonitored)"
 	res.DaysUntil = cfg.Cleanup.DelayDays
 	return res
 }
@@ -349,7 +350,7 @@ func getSeasonsWithFiles(ser *sonarr.Series) []int {
 // unmonitorSeries unmonitors a series in Sonarr when it's added to the cleanup queue
 func (s *Service) unmonitorSeries(ctx context.Context, seriesID int, title string, queue *Queue, dryRun bool) {
 	if dryRun {
-		logger.Warnf("🔕 [DRY RUN] Would unmonitor series: %s", title)
+		logger.Warnf("🔕 [DRY RUN] Would unmonitor series: %s (queued for deletion)", title)
 		return
 	}
 
@@ -358,5 +359,6 @@ func (s *Service) unmonitorSeries(ctx context.Context, seriesID int, title strin
 		return
 	}
 
+	logger.Infof("🔕 Unmonitored series: %s (queued for deletion)", title)
 	queue.MarkUnmonitored(seriesID)
 }
