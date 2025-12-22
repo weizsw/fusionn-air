@@ -77,6 +77,21 @@ func (s *Service) processOneMovie(movie *radarr.Movie, watchedByTmdb map[int]*tr
 		return res
 	}
 
+	// Check if already in queue (before checking monitored status)
+	// This ensures queued items remain visible even after being unmonitored
+	if queue.IsQueued(movie.ID) {
+		queueItem := queue.Get(movie.ID)
+		daysInQueue := int(time.Since(queueItem.MarkedAt).Hours() / 24)
+		daysUntil := cfg.Cleanup.DelayDays - daysInQueue
+		if daysUntil < 0 {
+			daysUntil = 0
+		}
+		res.Action = "queued"
+		res.Reason = queueItem.Reason + " - queued for deletion (unmonitored)"
+		res.DaysUntil = daysUntil
+		return res
+	}
+
 	// Check if movie is monitored
 	if !movie.Monitored {
 		res.Action = "skipped"
@@ -106,20 +121,6 @@ func (s *Service) processOneMovie(movie *radarr.Movie, watchedByTmdb map[int]*tr
 	// Movie is watched
 	watchedReason := fmt.Sprintf("watched %s", watched.LastWatchedAt.Format("2006-01-02"))
 
-	// Check if already queued
-	if queue.IsQueued(movie.ID) {
-		queueItem := queue.Get(movie.ID)
-		daysInQueue := int(time.Since(queueItem.MarkedAt).Hours() / 24)
-		daysUntil := cfg.Cleanup.DelayDays - daysInQueue
-		if daysUntil < 0 {
-			daysUntil = 0
-		}
-		res.Action = "queued"
-		res.Reason = watchedReason
-		res.DaysUntil = daysUntil
-		return res
-	}
-
 	// Add to queue
 	queue.Add(&QueueItem{
 		ID:         movie.ID,
@@ -131,7 +132,7 @@ func (s *Service) processOneMovie(movie *radarr.Movie, watchedByTmdb map[int]*tr
 	})
 
 	res.Action = "queued"
-	res.Reason = watchedReason + " - added to queue"
+	res.Reason = watchedReason + " - queued for deletion (unmonitored)"
 	res.DaysUntil = cfg.Cleanup.DelayDays
 	return res
 }
@@ -197,7 +198,7 @@ func (s *Service) processMovieRemovalQueue(ctx context.Context, result *Processi
 // unmonitorMovie unmonitors a movie in Radarr when it's added to the cleanup queue
 func (s *Service) unmonitorMovie(ctx context.Context, movieID int, title string, queue *Queue, dryRun bool) {
 	if dryRun {
-		logger.Warnf("🔕 [DRY RUN] Would unmonitor movie: %s", title)
+		logger.Warnf("🔕 [DRY RUN] Would unmonitor movie: %s (queued for deletion)", title)
 		return
 	}
 
@@ -206,5 +207,6 @@ func (s *Service) unmonitorMovie(ctx context.Context, movieID int, title string,
 		return
 	}
 
+	logger.Infof("🔕 Unmonitored movie: %s (queued for deletion)", title)
 	queue.MarkUnmonitored(movieID)
 }
