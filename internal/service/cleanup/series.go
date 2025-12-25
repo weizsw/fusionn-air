@@ -54,7 +54,10 @@ func (s *Service) processSeries(ctx context.Context, result *ProcessingResult, c
 		if res.Action == "queued" && res.Reason != "" && strings.HasSuffix(res.Reason, "added to queue") {
 			s.unmonitorSeries(ctx, ser.ID, ser.Title, queue, dryRun)
 		}
-		result.AddResult(res)
+		// Only add non-empty results (skip items ready for removal)
+		if res.ID != 0 {
+			result.AddResult(res)
+		}
 	}
 
 	// Process removal queue
@@ -78,7 +81,15 @@ func (s *Service) processOneSeries(ctx context.Context, ser *sonarr.Series, watc
 
 	// Check if already in queue (before checking monitored status)
 	// This ensures queued items remain visible even after being unmonitored
+	// However, skip items that are ready for removal - they'll appear in REMOVED section
 	if queue.IsQueued(ser.ID) {
+		// If item is ready for removal, skip it here so it doesn't appear twice
+		// It will be processed by processSeriesRemovalQueue and appear as "removed"
+		if queue.IsReadyForRemoval(ser.ID, cfg.Cleanup.DelayDays) {
+			// Return empty result - this item will be handled by removal queue
+			return MediaResult{}
+		}
+
 		queueItem := queue.Get(ser.ID)
 		daysInQueue := int(time.Since(queueItem.MarkedAt).Hours() / 24)
 		daysUntil := cfg.Cleanup.DelayDays - daysInQueue
