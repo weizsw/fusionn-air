@@ -116,7 +116,7 @@ func (q *Queue) IsQueued(id int) bool {
 }
 
 // IsReadyForRemoval checks if a specific item is ready for removal
-func (q *Queue) IsReadyForRemoval(id int, delayDays int) bool {
+func (q *Queue) IsReadyForRemoval(id, delayDays int) bool {
 	q.mu.RLock()
 	defer q.mu.RUnlock()
 
