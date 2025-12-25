@@ -38,7 +38,3 @@ data/
 # Build
 dist/
 bin/
-
-# OpenSpec
-openspec/
-AGENTS.md

@@ -115,6 +115,21 @@ func (q *Queue) IsQueued(id int) bool {
 	return exists
 }
 
+// IsReadyForRemoval checks if a specific item is ready for removal
+func (q *Queue) IsReadyForRemoval(id int, delayDays int) bool {
+	q.mu.RLock()
+	defer q.mu.RUnlock()
+
+	item, exists := q.items[id]
+	if !exists {
+		return false
+	}
+
+	delay := time.Duration(delayDays) * 24 * time.Hour
+	cutoff := time.Now().Add(-delay)
+	return item.MarkedAt.Before(cutoff)
+}
+
 // load reads the queue from disk
 func (q *Queue) load() error {
 	data, err := os.ReadFile(q.filePath)
