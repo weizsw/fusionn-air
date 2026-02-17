@@ -167,6 +167,7 @@ func (c *Client) GetMyShowsCalendar(ctx context.Context, days int) ([]CalendarSh
 	var shows []CalendarShow
 	resp, err := c.client.R().
 		SetContext(ctx).
+		SetQueryParam("extended", "full").
 		SetResult(&shows).
 		Get(path)
 

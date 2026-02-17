@@ -99,6 +99,27 @@ watcher:
   # Trakt API max is 33 days
   calendar_days: 14
 
+  # ── Routing (Optional) ──────────────────────────────────────────────────
+  # Route requests to different Overseerr backend servers based on genre
+  # or country of origin. Useful when you have separate servers for anime,
+  # K-dramas, J-dramas, C-dramas, etc.
+  #
+  # To find your server IDs, check Overseerr Settings > Services or call:
+  #   curl -H "X-Api-Key: <key>" http://overseerr:5055/api/v1/settings/sonarr
+  #
+  # If routing is not configured, requests use Overseerr's default server.
+  routing:
+    default_server_id: 0          # Server ID for regular TV shows (e.g. Sonarr)
+    alternate_server_id: 1        # Server ID for matched content (e.g. MoviePilot)
+    alternate_genres: []           # Genres that route to alternate server
+    alternate_countries: []        # Country codes that route to alternate server
+  # Example:
+  # routing:
+  #   default_server_id: 0
+  #   alternate_server_id: 1
+  #   alternate_genres: ["anime"]
+  #   alternate_countries: ["jp", "kr", "cn"]
+
 # ─────────────────────────────────────────────────────────────────────────────
 # CLEANUP - Auto-remove fully watched content from Sonarr/Radarr
 # ─────────────────────────────────────────────────────────────────────────────

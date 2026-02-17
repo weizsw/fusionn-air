@@ -92,7 +92,8 @@ type TVRequest struct {
 	MediaType string `json:"mediaType"`
 	MediaID   int    `json:"mediaId"` // TMDB ID
 	Seasons   []int  `json:"seasons"`
-	UserID    int    `json:"userId,omitempty"` // Request as specific user
+	UserID    int    `json:"userId,omitempty"`   // Request as specific user
+	ServerID  *int   `json:"serverId,omitempty"` // Target Overseerr backend server
 }
 
 // TVDetails from Overseerr

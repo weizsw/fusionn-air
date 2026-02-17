@@ -32,7 +32,11 @@ func (f *SlackFormatter) FormatWatcherResults(requested, skipped, errors int, de
 	if len(requestedItems) > 0 {
 		fmt.Fprintf(&sb, "*📥 REQUESTED (%d):*\n", len(requestedItems))
 		for _, item := range requestedItems {
-			fmt.Fprintf(&sb, "• %s S%02d ← %s\n", item.ShowTitle, item.Season, item.Reason)
+			routeTag := ""
+			if item.Route != "" {
+				routeTag = fmt.Sprintf(" [→ %s]", item.Route)
+			}
+			fmt.Fprintf(&sb, "• %s S%02d ← %s%s\n", item.ShowTitle, item.Season, item.Reason, routeTag)
 		}
 		sb.WriteString("\n")
 	}
@@ -164,6 +168,7 @@ type WatcherDetail struct {
 	Season    int
 	Action    string
 	Reason    string
+	Route     string // "default", "alternate", or "" (no routing)
 }
 
 // CleanupDetail represents a single cleanup result item
