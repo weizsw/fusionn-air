@@ -18,9 +18,11 @@ type Episode struct {
 }
 
 type Show struct {
-	Title string `json:"title"`
-	Year  int    `json:"year"`
-	IDs   IDs    `json:"ids"`
+	Title   string   `json:"title"`
+	Year    int      `json:"year"`
+	IDs     IDs      `json:"ids"`
+	Genres  []string `json:"genres,omitempty"`
+	Country string   `json:"country,omitempty"`
 }
 
 type IDs struct {

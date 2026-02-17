@@ -36,6 +36,7 @@ type ProcessResult struct {
 	Action    string    `json:"action"` // "requested", "skipped", "error", "already_requested", "dry_run"
 	Reason    string    `json:"reason,omitempty"`
 	Error     string    `json:"error,omitempty"`
+	Route     string    `json:"route,omitempty"` // "default", "alternate", or "" (no routing configured)
 }
 
 func NewService(traktClient *trakt.Client, overseerrClient *overseerr.Client, appriseClient *apprise.Client, cfgMgr *config.Manager) *Service {
@@ -84,10 +85,11 @@ func (s *Service) ProcessCalendar(ctx context.Context) ([]ProcessResult, error) 
 	logger.Info("")
 
 	var results []ProcessResult
+	routing := cfg.Watcher.Routing
 
 	// Process each show/season silently
 	for _, item := range showSeasons {
-		result := s.processShow(ctx, item, dryRun)
+		result := s.processShow(ctx, item, dryRun, routing)
 		results = append(results, result)
 	}
 
@@ -114,9 +116,13 @@ func (s *Service) printSummary(results []ProcessResult, startTime time.Time, dry
 
 	for _, r := range results {
 		showInfo := fmt.Sprintf("%s S%02d", r.ShowTitle, r.Season)
+		routeTag := ""
+		if r.Route != "" {
+			routeTag = fmt.Sprintf(" [→ %s]", r.Route)
+		}
 		switch r.Action {
 		case "requested", "dry_run":
-			willRequest = append(willRequest, fmt.Sprintf("   • %-35s  ← %s", showInfo, r.Reason))
+			willRequest = append(willRequest, fmt.Sprintf("   • %-35s  ← %s%s", showInfo, r.Reason, routeTag))
 		case "skipped", "already_requested":
 			willSkip = append(willSkip, fmt.Sprintf("   • %-35s  ← %s", showInfo, r.Reason))
 		case "error":
@@ -195,6 +201,7 @@ func (s *Service) sendNotification(ctx context.Context, results []ProcessResult,
 			Season:    r.Season,
 			Action:    r.Action,
 			Reason:    r.Reason,
+			Route:     r.Route,
 		})
 	}
 
@@ -225,6 +232,8 @@ type calendarItem struct {
 	season  int
 	episode int
 	airDate time.Time
+	genres  []string
+	country string
 }
 
 func (s *Service) groupByShowAndSeason(items []trakt.CalendarShow) map[string]calendarItem {
@@ -238,6 +247,8 @@ func (s *Service) groupByShowAndSeason(items []trakt.CalendarShow) map[string]ca
 				season:  item.Episode.Season,
 				episode: item.Episode.Number,
 				airDate: item.FirstAired,
+				genres:  item.Show.Genres,
+				country: item.Show.Country,
 			}
 		}
 	}
@@ -245,7 +256,7 @@ func (s *Service) groupByShowAndSeason(items []trakt.CalendarShow) map[string]ca
 	return result
 }
 
-func (s *Service) processShow(ctx context.Context, item calendarItem, dryRun bool) ProcessResult {
+func (s *Service) processShow(ctx context.Context, item calendarItem, dryRun bool, routing config.RoutingConfig) ProcessResult {
 	result := ProcessResult{
 		ShowTitle: item.show.Title,
 		ShowTMDB:  item.show.IDs.TMDB,
@@ -253,6 +264,10 @@ func (s *Service) processShow(ctx context.Context, item calendarItem, dryRun boo
 		Episode:   item.episode,
 		AirDate:   item.airDate,
 	}
+
+	// Determine routing
+	serverID, route := determineServerID(item.genres, item.country, routing)
+	result.Route = route
 
 	// Skip if no TMDB ID (can't request without it)
 	if item.show.IDs.TMDB == 0 {
@@ -312,8 +327,8 @@ func (s *Service) processShow(ctx context.Context, item calendarItem, dryRun boo
 		return result
 	}
 
-	// Request the season
-	_, err = s.overseerr.RequestTV(ctx, item.show.IDs.TMDB, []int{item.season})
+	// Request the season with routing
+	_, err = s.overseerr.RequestTV(ctx, item.show.IDs.TMDB, []int{item.season}, serverID)
 	if err != nil {
 		result.Action = "error"
 		result.Error = fmt.Sprintf("request failed: %v", err)
@@ -323,6 +338,40 @@ func (s *Service) processShow(ctx context.Context, item calendarItem, dryRun boo
 	result.Action = "requested"
 	result.Reason = reason
 	return result
+}
+
+// determineServerID checks show genres and country against routing config
+// to decide which Overseerr backend server should handle the request.
+func determineServerID(genres []string, country string, routing config.RoutingConfig) (*int, string) {
+	// If no routing rules are configured, don't set a server ID
+	if len(routing.AlternateGenres) == 0 && len(routing.AlternateCountries) == 0 {
+		return nil, ""
+	}
+
+	countryLower := strings.ToLower(country)
+
+	// Check genre match
+	for _, showGenre := range genres {
+		showGenreLower := strings.ToLower(showGenre)
+		for _, altGenre := range routing.AlternateGenres {
+			if showGenreLower == strings.ToLower(altGenre) {
+				id := routing.AlternateServerID
+				return &id, "alternate"
+			}
+		}
+	}
+
+	// Check country match
+	for _, altCountry := range routing.AlternateCountries {
+		if countryLower == strings.ToLower(altCountry) {
+			id := routing.AlternateServerID
+			return &id, "alternate"
+		}
+	}
+
+	// Default server
+	id := routing.DefaultServerID
+	return &id, "default"
 }
 
 // shouldRequestSeason determines if a season should be requested based on watch progress
@@ -445,6 +494,3 @@ func (s *Service) GetStats() Stats {
 
 	return stats
 }
-
-// unused but keeping for reference
-var _ = strings.Join

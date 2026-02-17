@@ -75,13 +75,15 @@ func (c *Client) GetTVByTMDB(ctx context.Context, tmdbID int) (*TVDetails, error
 	return &details, nil
 }
 
-// RequestTV requests specific seasons of a TV show
-func (c *Client) RequestTV(ctx context.Context, tmdbID int, seasons []int) (*RequestResponse, error) {
+// RequestTV requests specific seasons of a TV show.
+// serverID is optional — when non-nil, it targets a specific Overseerr backend server.
+func (c *Client) RequestTV(ctx context.Context, tmdbID int, seasons []int, serverID *int) (*RequestResponse, error) {
 	body := TVRequest{
 		MediaType: string(MediaTypeTV),
 		MediaID:   tmdbID,
 		Seasons:   seasons,
 		UserID:    c.userID,
+		ServerID:  serverID,
 	}
 
 	var result RequestResponse
@@ -99,7 +101,11 @@ func (c *Client) RequestTV(ctx context.Context, tmdbID int, seasons []int) (*Req
 		return nil, fmt.Errorf("API error: status=%d body=%s", resp.StatusCode(), resp.String())
 	}
 
-	logger.Infof("📥 Requested TMDB=%d seasons=%v via Overseerr", tmdbID, seasons)
+	if serverID != nil {
+		logger.Infof("📥 Requested TMDB=%d seasons=%v via Overseerr (serverId=%d)", tmdbID, seasons, *serverID)
+	} else {
+		logger.Infof("📥 Requested TMDB=%d seasons=%v via Overseerr", tmdbID, seasons)
+	}
 	return &result, nil
 }
 

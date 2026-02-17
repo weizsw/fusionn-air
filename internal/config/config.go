@@ -58,8 +58,16 @@ type SchedulerConfig struct {
 }
 
 type WatcherConfig struct {
-	Enabled      bool `mapstructure:"enabled"`
-	CalendarDays int  `mapstructure:"calendar_days"` // Days ahead to check for new episodes
+	Enabled      bool          `mapstructure:"enabled"`
+	CalendarDays int           `mapstructure:"calendar_days"` // Days ahead to check for new episodes
+	Routing      RoutingConfig `mapstructure:"routing"`
+}
+
+type RoutingConfig struct {
+	DefaultServerID    int      `mapstructure:"default_server_id"`
+	AlternateServerID  int      `mapstructure:"alternate_server_id"`
+	AlternateGenres    []string `mapstructure:"alternate_genres"`
+	AlternateCountries []string `mapstructure:"alternate_countries"`
 }
 
 type CleanupConfig struct {

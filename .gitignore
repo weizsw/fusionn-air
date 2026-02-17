@@ -33,7 +33,6 @@ config/*.local.yaml
 
 # Data directory (tokens, etc)
 data/
-.cursor/
 
 # Build
 dist/
