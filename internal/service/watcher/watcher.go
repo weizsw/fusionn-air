@@ -348,13 +348,10 @@ func determineServerID(genres []string, country string, routing config.RoutingCo
 		return nil, ""
 	}
 
-	countryLower := strings.ToLower(country)
-
 	// Check genre match
 	for _, showGenre := range genres {
-		showGenreLower := strings.ToLower(showGenre)
 		for _, altGenre := range routing.AlternateGenres {
-			if showGenreLower == strings.ToLower(altGenre) {
+			if strings.EqualFold(showGenre, altGenre) {
 				id := routing.AlternateServerID
 				return &id, "alternate"
 			}
@@ -363,7 +360,7 @@ func determineServerID(genres []string, country string, routing config.RoutingCo
 
 	// Check country match
 	for _, altCountry := range routing.AlternateCountries {
-		if countryLower == strings.ToLower(altCountry) {
+		if strings.EqualFold(country, altCountry) {
 			id := routing.AlternateServerID
 			return &id, "alternate"
 		}
