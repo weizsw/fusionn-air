@@ -69,25 +69,28 @@ func (f *SlackFormatter) FormatCleanupResults(removed, queued, skipped, errors i
 		sb.WriteString("⚠️ *DRY RUN MODE*\n\n")
 	}
 
-	// Separate by media type first
 	seriesDetails := make(map[string][]CleanupDetail)
 	movieDetails := make(map[string][]CleanupDetail)
+	embySeriesDetails := make(map[string][]CleanupDetail)
+	embyMovieDetails := make(map[string][]CleanupDetail)
 
 	for _, d := range details {
-		// Determine type by checking if it looks like a movie (has year in title typically)
-		// For now we categorize by action and will separate in summary
-		if d.MediaType == "movie" {
+		switch d.MediaType {
+		case "movie":
 			movieDetails[d.Action] = append(movieDetails[d.Action], d)
-		} else {
+		case "emby_series":
+			embySeriesDetails[d.Action] = append(embySeriesDetails[d.Action], d)
+		case "emby_movie":
+			embyMovieDetails[d.Action] = append(embyMovieDetails[d.Action], d)
+		default:
 			seriesDetails[d.Action] = append(seriesDetails[d.Action], d)
 		}
 	}
 
-	// Format series section
-	f.formatMediaTypeSection(&sb, "📺 SERIES", seriesDetails, dryRun)
-
-	// Format movies section
-	f.formatMediaTypeSection(&sb, "🎬 MOVIES", movieDetails, dryRun)
+	f.formatMediaTypeSection(&sb, "📺 SERIES (Sonarr)", seriesDetails, dryRun)
+	f.formatMediaTypeSection(&sb, "🎬 MOVIES (Radarr)", movieDetails, dryRun)
+	f.formatMediaTypeSection(&sb, "📺 SERIES (Emby)", embySeriesDetails, dryRun)
+	f.formatMediaTypeSection(&sb, "🎬 MOVIES (Emby)", embyMovieDetails, dryRun)
 
 	return sb.String()
 }

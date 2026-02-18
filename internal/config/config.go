@@ -19,6 +19,7 @@ type Config struct {
 	Overseerr OverseerrConfig `mapstructure:"overseerr"`
 	Sonarr    SonarrConfig    `mapstructure:"sonarr"`
 	Radarr    RadarrConfig    `mapstructure:"radarr"`
+	Emby      EmbyConfig      `mapstructure:"emby"`
 	Scheduler SchedulerConfig `mapstructure:"scheduler"`
 	Watcher   WatcherConfig   `mapstructure:"watcher"`
 	Cleanup   CleanupConfig   `mapstructure:"cleanup"`
@@ -47,6 +48,12 @@ type SonarrConfig struct {
 }
 
 type RadarrConfig struct {
+	BaseURL string `mapstructure:"base_url"`
+	APIKey  string `mapstructure:"api_key"`
+}
+
+type EmbyConfig struct {
+	Enabled bool   `mapstructure:"enabled"`
 	BaseURL string `mapstructure:"base_url"`
 	APIKey  string `mapstructure:"api_key"`
 }

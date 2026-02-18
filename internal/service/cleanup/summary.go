@@ -14,12 +14,19 @@ func (s *Service) printSummary(result *ProcessingResult, startTime time.Time, dr
 	seriesResults := make(map[string][]MediaResult)
 	movieResults := make(map[string][]MediaResult)
 
+	embySeriesResults := make(map[string][]MediaResult)
+	embyMovieResults := make(map[string][]MediaResult)
+
 	for _, r := range result.Results {
 		switch r.Type {
 		case MediaTypeSeries:
 			seriesResults[r.Action] = append(seriesResults[r.Action], r)
 		case MediaTypeMovie:
 			movieResults[r.Action] = append(movieResults[r.Action], r)
+		case MediaTypeEmbySeries:
+			embySeriesResults[r.Action] = append(embySeriesResults[r.Action], r)
+		case MediaTypeEmbyMovie:
+			embyMovieResults[r.Action] = append(embyMovieResults[r.Action], r)
 		}
 	}
 
@@ -28,11 +35,10 @@ func (s *Service) printSummary(result *ProcessingResult, startTime time.Time, dr
 	logger.Info("│                    CLEANUP RESULTS                           │")
 	logger.Info("└──────────────────────────────────────────────────────────────┘")
 
-	// Print Series section
-	printMediaSection("📺 SERIES", seriesResults, dryRun)
-
-	// Print Movies section
-	printMediaSection("🎬 MOVIES", movieResults, dryRun)
+	printMediaSection("📺 SERIES (Sonarr)", seriesResults, dryRun)
+	printMediaSection("🎬 MOVIES (Radarr)", movieResults, dryRun)
+	printMediaSection("📺 SERIES (Emby)", embySeriesResults, dryRun)
+	printMediaSection("🎬 MOVIES (Emby)", embyMovieResults, dryRun)
 
 	// Print per-type stats
 	logger.Info("")
@@ -176,9 +182,9 @@ func (s *Service) sendNotification(ctx context.Context, result *ProcessingResult
 
 func mediaIcon(t MediaType) string {
 	switch t {
-	case MediaTypeSeries:
+	case MediaTypeSeries, MediaTypeEmbySeries:
 		return "📺"
-	case MediaTypeMovie:
+	case MediaTypeMovie, MediaTypeEmbyMovie:
 		return "🎬"
 	default:
 		return "📦"
