@@ -12,11 +12,10 @@ import (
 	"github.com/fusionn-air/pkg/logger"
 )
 
-// processSeries handles TV series cleanup using Sonarr
-func (s *Service) processSeries(ctx context.Context, result *ProcessingResult, cfg *config.Config, dryRun bool) {
+func (s *Service) processSeries(ctx context.Context, result *ProcessingResult, cfg *config.Config, dryRun bool) (sonarrTvdbIDs map[int]bool) {
 	if s.sonarr == nil {
 		logger.Debug("Sonarr client not configured, skipping series cleanup")
-		return
+		return nil
 	}
 
 	queue := s.queues[MediaTypeSeries]
@@ -25,7 +24,14 @@ func (s *Service) processSeries(ctx context.Context, result *ProcessingResult, c
 	series, err := s.sonarr.GetAllSeries(ctx)
 	if err != nil {
 		logger.Errorf("❌ Failed to get series from Sonarr: %v", err)
-		return
+		return nil
+	}
+
+	sonarrTvdbIDs = make(map[int]bool, len(series))
+	for _, ser := range series {
+		if ser.TvdbID > 0 {
+			sonarrTvdbIDs[ser.TvdbID] = true
+		}
 	}
 
 	result.IncrementScanned(MediaTypeSeries, len(series))
@@ -60,8 +66,8 @@ func (s *Service) processSeries(ctx context.Context, result *ProcessingResult, c
 		}
 	}
 
-	// Process removal queue
 	s.processSeriesRemovalQueue(ctx, result, queue, cfg, dryRun)
+	return
 }
 
 func (s *Service) processOneSeries(ctx context.Context, ser *sonarr.Series, watchedByTvdb map[int]*trakt.WatchedShow, queue *Queue, cfg *config.Config) MediaResult {

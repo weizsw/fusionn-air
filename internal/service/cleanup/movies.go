@@ -12,11 +12,10 @@ import (
 	"github.com/fusionn-air/pkg/logger"
 )
 
-// processMovies handles movie cleanup using Radarr
-func (s *Service) processMovies(ctx context.Context, result *ProcessingResult, cfg *config.Config, dryRun bool) {
+func (s *Service) processMovies(ctx context.Context, result *ProcessingResult, cfg *config.Config, dryRun bool) (radarrTmdbIDs map[int]bool) {
 	if s.radarr == nil {
 		logger.Debug("Radarr client not configured, skipping movie cleanup")
-		return
+		return nil
 	}
 
 	queue := s.queues[MediaTypeMovie]
@@ -25,7 +24,14 @@ func (s *Service) processMovies(ctx context.Context, result *ProcessingResult, c
 	movies, err := s.radarr.GetAllMovies(ctx)
 	if err != nil {
 		logger.Errorf("❌ Failed to get movies from Radarr: %v", err)
-		return
+		return nil
+	}
+
+	radarrTmdbIDs = make(map[int]bool, len(movies))
+	for _, movie := range movies {
+		if movie.TmdbID > 0 {
+			radarrTmdbIDs[movie.TmdbID] = true
+		}
 	}
 
 	result.IncrementScanned(MediaTypeMovie, len(movies))
@@ -60,8 +66,8 @@ func (s *Service) processMovies(ctx context.Context, result *ProcessingResult, c
 		}
 	}
 
-	// Process removal queue
 	s.processMovieRemovalQueue(ctx, result, queue, cfg, dryRun)
+	return
 }
 
 func (s *Service) processOneMovie(movie *radarr.Movie, watchedByTmdb map[int]*trakt.WatchedMovie, queue *Queue, cfg *config.Config) MediaResult {

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/fusionn-air/internal/client/apprise"
+	"github.com/fusionn-air/internal/client/emby"
 	"github.com/fusionn-air/internal/client/radarr"
 	"github.com/fusionn-air/internal/client/sonarr"
 	"github.com/fusionn-air/internal/client/trakt"
@@ -18,23 +19,21 @@ import (
 type MediaType string
 
 const (
-	MediaTypeSeries MediaType = "series"
-	MediaTypeMovie  MediaType = "movie"
-	// Add new types here: MediaTypeAudiobook, MediaTypeMusic, etc.
+	MediaTypeSeries     MediaType = "series"
+	MediaTypeMovie      MediaType = "movie"
+	MediaTypeEmbySeries MediaType = "emby_series"
+	MediaTypeEmbyMovie  MediaType = "emby_movie"
 )
 
 // Service handles cleanup of fully watched media
 type Service struct {
-	// Clients - add new clients here
 	sonarr  *sonarr.Client
 	radarr  *radarr.Client
+	emby    *emby.Client
 	trakt   *trakt.Client
 	apprise *apprise.Client
 
-	// Config manager for hot-reload support
 	cfgMgr *config.Manager
-
-	// Queues per media type - extensible
 	queues map[MediaType]*Queue
 
 	mu          sync.RWMutex
@@ -74,20 +73,21 @@ type MediaStats struct {
 	Skipped        int `json:"skipped"`
 }
 
-func NewService(sonarrClient *sonarr.Client, radarrClient *radarr.Client, traktClient *trakt.Client, appriseClient *apprise.Client, cfgMgr *config.Manager) *Service {
+func NewService(sonarrClient *sonarr.Client, radarrClient *radarr.Client, embyClient *emby.Client, traktClient *trakt.Client, appriseClient *apprise.Client, cfgMgr *config.Manager) *Service {
 	s := &Service{
 		sonarr:  sonarrClient,
 		radarr:  radarrClient,
+		emby:    embyClient,
 		trakt:   traktClient,
 		apprise: appriseClient,
 		cfgMgr:  cfgMgr,
 		queues:  make(map[MediaType]*Queue),
 	}
 
-	// Register queues for each media type
 	s.queues[MediaTypeSeries] = NewQueueWithFile("data/cleanup_series_queue.json")
 	s.queues[MediaTypeMovie] = NewQueueWithFile("data/cleanup_movie_queue.json")
-	// Add new queues here: s.queues[MediaTypeAudiobook] = NewQueueWithFile("data/cleanup_audiobook_queue.json")
+	s.queues[MediaTypeEmbySeries] = NewQueueWithFile("data/cleanup_emby_series_queue.json")
+	s.queues[MediaTypeEmbyMovie] = NewQueueWithFile("data/cleanup_emby_movie_queue.json")
 
 	return s
 }
@@ -118,10 +118,21 @@ func (s *Service) ProcessCleanup(ctx context.Context) (*ProcessingResult, error)
 		Stats: make(map[MediaType]*MediaStats),
 	}
 
-	// Process each media type - add new processors here
-	s.processSeries(ctx, result, cfg, dryRun)
-	s.processMovies(ctx, result, cfg, dryRun)
-	// Add new processors: s.processAudiobooks(ctx, result, cfg, dryRun)
+	sonarrTvdbIDs := s.processSeries(ctx, result, cfg, dryRun)
+	radarrTmdbIDs := s.processMovies(ctx, result, cfg, dryRun)
+
+	if s.emby != nil && cfg.Emby.Enabled {
+		if sonarrTvdbIDs != nil {
+			s.processEmbySeries(ctx, result, cfg, dryRun, sonarrTvdbIDs)
+		} else {
+			logger.Warn("⚠️  Skipping Emby series cleanup — Sonarr data unavailable (would cause false orphan detection)")
+		}
+		if radarrTmdbIDs != nil {
+			s.processEmbyMovies(ctx, result, cfg, dryRun, radarrTmdbIDs)
+		} else {
+			logger.Warn("⚠️  Skipping Emby movie cleanup — Radarr data unavailable (would cause false orphan detection)")
+		}
+	}
 
 	// Store results
 	s.mu.Lock()

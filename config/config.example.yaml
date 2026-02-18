@@ -67,6 +67,22 @@ radarr:
   api_key: ""                      # Required for movie cleanup - from Radarr settings
 
 # ─────────────────────────────────────────────────────────────────────────────
+# EMBY (Required for Emby Cleanup of MoviePilot content)
+# ─────────────────────────────────────────────────────────────────────────────
+# Emby is used to discover and clean up media added through MoviePilot
+# (or any other source not tracked by Sonarr/Radarr).
+#
+# The cleanup service compares Emby's library against Sonarr/Radarr to find
+# "orphan" items, then checks Trakt watch history and deletes fully watched
+# content directly from Emby (which removes the files from disk).
+#
+# Get API key from: Emby > Dashboard > API Keys > New
+emby:
+  enabled: false
+  base_url: "http://emby:8096"  # Emby server URL
+  api_key: ""                    # Emby API key
+
+# ─────────────────────────────────────────────────────────────────────────────
 # SCHEDULER (Shared settings for both Watcher and Cleanup)
 # ─────────────────────────────────────────────────────────────────────────────
 # Both watcher and cleanup run on the same schedule and share these settings.

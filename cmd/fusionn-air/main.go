@@ -12,6 +12,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/fusionn-air/internal/client/apprise"
+	"github.com/fusionn-air/internal/client/emby"
 	"github.com/fusionn-air/internal/client/overseerr"
 	"github.com/fusionn-air/internal/client/radarr"
 	"github.com/fusionn-air/internal/client/sonarr"
@@ -82,24 +83,33 @@ func main() {
 	// Initialize Sonarr and Radarr clients (if cleanup enabled)
 	var sonarrClient *sonarr.Client
 	var radarrClient *radarr.Client
+	var embyClient *emby.Client
 	var cleanupService *cleanup.Service
 
 	if cfg.Cleanup.Enabled {
-		// Sonarr (TV shows)
 		if cfg.Sonarr.BaseURL != "" {
 			logger.Info("🔗 Connecting to Sonarr...")
 			sonarrClient = sonarr.NewClient(cfg.Sonarr)
 			logger.Info("✅  Sonarr configured")
 		}
 
-		// Radarr (Movies)
 		if cfg.Radarr.BaseURL != "" {
 			logger.Info("🔗 Connecting to Radarr...")
 			radarrClient = radarr.NewClient(cfg.Radarr)
 			logger.Info("✅  Radarr configured")
 		}
 
-		cleanupService = cleanup.NewService(sonarrClient, radarrClient, traktClient, appriseClient, cfgMgr)
+		if cfg.Emby.Enabled {
+			if cfg.Emby.BaseURL != "" && cfg.Emby.APIKey != "" {
+				logger.Info("🔗 Connecting to Emby...")
+				embyClient = emby.NewClient(cfg.Emby)
+				logger.Info("✅  Emby configured")
+			} else {
+				logger.Warn("⚠️  Emby enabled but base_url or api_key is empty — skipping")
+			}
+		}
+
+		cleanupService = cleanup.NewService(sonarrClient, radarrClient, embyClient, traktClient, appriseClient, cfgMgr)
 		logger.Infof("🧹 Cleanup: enabled (delay=%d days)", cfg.Cleanup.DelayDays)
 	} else {
 		logger.Info("🧹 Cleanup: disabled")
