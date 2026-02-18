@@ -4,7 +4,7 @@
 TBD - created by archiving change add-unmonitor-before-removal. Update Purpose after archive.
 ## Requirements
 ### Requirement: Cleanup Queue Processing
-The cleanup service SHALL unmonitor media items immediately when they are added to the removal queue, then delete them after the configured delay period has passed. Each media item SHALL appear under exactly one status category (skipped, queued, or removed) in a single cleanup run.
+The cleanup service SHALL unmonitor media items immediately when they are added to the removal queue, then delete them after the configured delay period has passed. Each media item SHALL appear under exactly one status category (skipped, queued, or removed) in a single cleanup run. **The cleanup orchestrator SHALL additionally process Emby orphan series and movies after the Sonarr and Radarr cleanup steps, when Emby is configured and enabled.**
 
 #### Scenario: Series queued for removal
 - **WHEN** a fully watched series is detected
@@ -35,4 +35,10 @@ The cleanup service SHALL unmonitor media items immediately when they are added 
 - **THEN** the item SHALL NOT be reported as "queued" in the results
 - **AND** the item SHALL be processed by the removal queue
 - **AND** the item SHALL appear only in the "removed" status category
+
+#### Scenario: Emby orphan cleanup runs after Sonarr/Radarr
+- **WHEN** Emby is configured and enabled
+- **AND** Sonarr/Radarr cleanup has completed
+- **THEN** the cleanup service SHALL process Emby orphan series and movies
+- **AND** the Sonarr TVDB ID set and Radarr TMDB ID set from the current run SHALL be passed to the Emby cleanup for exclusion
 
