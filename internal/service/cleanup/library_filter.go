@@ -17,7 +17,7 @@ func ResolveExcludedLibraryIDs(configuredNames []string, libraries []emby.Virtua
 
 	byName := make(map[string]string, len(libraries))
 	for _, lib := range libraries {
-		byName[strings.ToLower(lib.Name)] = lib.ItemId
+		byName[strings.ToLower(lib.Name)] = lib.ItemID
 	}
 
 	excluded := make(map[string]bool, len(configuredNames))
@@ -34,7 +34,7 @@ func ResolveExcludedLibraryIDs(configuredNames []string, libraries []emby.Virtua
 	return excluded
 }
 
-// filterByLibrary removes items whose ParentId is in the excluded set.
+// filterByLibrary removes items whose ParentID is in the excluded set.
 func filterByLibrary(items []emby.Item, excludedIDs map[string]bool) []emby.Item {
 	if len(excludedIDs) == 0 {
 		return items
@@ -42,7 +42,7 @@ func filterByLibrary(items []emby.Item, excludedIDs map[string]bool) []emby.Item
 
 	filtered := make([]emby.Item, 0, len(items))
 	for _, item := range items {
-		if !excludedIDs[item.ParentId] {
+		if !excludedIDs[item.ParentID] {
 			filtered = append(filtered, item)
 		}
 	}

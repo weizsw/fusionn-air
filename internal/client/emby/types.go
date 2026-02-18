@@ -12,7 +12,7 @@ type Item struct {
 	Name         string      `json:"Name"`
 	Type         string      `json:"Type"`
 	Path         string      `json:"Path"`
-	ParentId     string      `json:"ParentId"`
+	ParentID     string      `json:"ParentId"`
 	ProviderIDs  ProviderIDs `json:"ProviderIds"`
 	IndexNumber  int         `json:"IndexNumber"`
 	LocationType string      `json:"LocationType"`
@@ -21,7 +21,7 @@ type Item struct {
 
 type VirtualFolder struct {
 	Name   string `json:"Name"`
-	ItemId string `json:"ItemId"`
+	ItemID string `json:"ItemId"`
 }
 
 type ProviderIDs struct {

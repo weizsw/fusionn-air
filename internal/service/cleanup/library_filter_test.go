@@ -15,10 +15,10 @@ func TestMain(m *testing.M) {
 
 func TestResolveExcludedLibraryIDs(t *testing.T) {
 	libraries := []emby.VirtualFolder{
-		{Name: "TV Shows", ItemId: "100"},
-		{Name: "Movies", ItemId: "200"},
-		{Name: "Anime", ItemId: "300"},
-		{Name: "Kids", ItemId: "400"},
+		{Name: "TV Shows", ItemID: "100"},
+		{Name: "Movies", ItemID: "200"},
+		{Name: "Anime", ItemID: "300"},
+		{Name: "Kids", ItemID: "400"},
 	}
 
 	tests := []struct {
@@ -85,10 +85,10 @@ func TestResolveExcludedLibraryIDs(t *testing.T) {
 
 func TestFilterByLibrary(t *testing.T) {
 	items := []emby.Item{
-		{ID: "1", Name: "Show A", ParentId: "100"},
-		{ID: "2", Name: "Show B", ParentId: "200"},
-		{ID: "3", Name: "Show C", ParentId: "300"},
-		{ID: "4", Name: "Show D", ParentId: "100"},
+		{ID: "1", Name: "Show A", ParentID: "100"},
+		{ID: "2", Name: "Show B", ParentID: "200"},
+		{ID: "3", Name: "Show C", ParentID: "300"},
+		{ID: "4", Name: "Show D", ParentID: "100"},
 	}
 
 	tests := []struct {
