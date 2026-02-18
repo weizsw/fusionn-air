@@ -82,6 +82,16 @@ emby:
   base_url: "http://emby:8096"  # Emby server URL
   api_key: ""                    # Emby API key
 
+  # Libraries to exclude from cleanup (case-insensitive, by display name)
+  # Items in these libraries are completely ignored — never treated as orphans.
+  # Useful for libraries managed outside Sonarr/Radarr (e.g., MoviePilot, manual).
+  excluded_libraries: []
+  # Example:
+  # excluded_libraries:
+  #   - "Anime"
+  #   - "Kids"
+  #   - "Music Videos"
+
 # ─────────────────────────────────────────────────────────────────────────────
 # SCHEDULER (Shared settings for both Watcher and Cleanup)
 # ─────────────────────────────────────────────────────────────────────────────
