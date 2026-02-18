@@ -122,13 +122,15 @@ func (s *Service) ProcessCleanup(ctx context.Context) (*ProcessingResult, error)
 	radarrTmdbIDs := s.processMovies(ctx, result, cfg, dryRun)
 
 	if s.emby != nil && cfg.Emby.Enabled {
+		excludedLibIDs := s.resolveExcludedLibraries(ctx, cfg)
+
 		if sonarrTvdbIDs != nil {
-			s.processEmbySeries(ctx, result, cfg, dryRun, sonarrTvdbIDs)
+			s.processEmbySeries(ctx, result, cfg, dryRun, sonarrTvdbIDs, excludedLibIDs)
 		} else {
 			logger.Warn("⚠️  Skipping Emby series cleanup — Sonarr data unavailable (would cause false orphan detection)")
 		}
 		if radarrTmdbIDs != nil {
-			s.processEmbyMovies(ctx, result, cfg, dryRun, radarrTmdbIDs)
+			s.processEmbyMovies(ctx, result, cfg, dryRun, radarrTmdbIDs, excludedLibIDs)
 		} else {
 			logger.Warn("⚠️  Skipping Emby movie cleanup — Radarr data unavailable (would cause false orphan detection)")
 		}
@@ -145,6 +147,22 @@ func (s *Service) ProcessCleanup(ctx context.Context) (*ProcessingResult, error)
 	s.sendNotification(ctx, result, dryRun)
 
 	return result, nil
+}
+
+// resolveExcludedLibraries fetches Emby libraries and resolves configured
+// exclusion names to IDs. Returns nil on failure (all items processed).
+func (s *Service) resolveExcludedLibraries(ctx context.Context, cfg *config.Config) map[string]bool {
+	if len(cfg.Emby.ExcludedLibraries) == 0 {
+		return nil
+	}
+
+	libraries, err := s.emby.GetLibraries(ctx)
+	if err != nil {
+		logger.Warnf("⚠️  Failed to fetch Emby libraries: %v — proceeding without library filtering", err)
+		return nil
+	}
+
+	return ResolveExcludedLibraryIDs(cfg.Emby.ExcludedLibraries, libraries)
 }
 
 // GetQueue returns the queue for a specific media type

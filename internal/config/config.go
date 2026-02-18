@@ -53,9 +53,10 @@ type RadarrConfig struct {
 }
 
 type EmbyConfig struct {
-	Enabled bool   `mapstructure:"enabled"`
-	BaseURL string `mapstructure:"base_url"`
-	APIKey  string `mapstructure:"api_key"`
+	Enabled           bool     `mapstructure:"enabled"`
+	BaseURL           string   `mapstructure:"base_url"`
+	APIKey            string   `mapstructure:"api_key"`
+	ExcludedLibraries []string `mapstructure:"excluded_libraries"`
 }
 
 type SchedulerConfig struct {

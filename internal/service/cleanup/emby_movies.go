@@ -12,7 +12,7 @@ import (
 	"github.com/fusionn-air/pkg/logger"
 )
 
-func (s *Service) processEmbyMovies(ctx context.Context, result *ProcessingResult, cfg *config.Config, dryRun bool, radarrTmdbIDs map[int]bool) {
+func (s *Service) processEmbyMovies(ctx context.Context, result *ProcessingResult, cfg *config.Config, dryRun bool, radarrTmdbIDs map[int]bool, excludedLibIDs map[string]bool) {
 	if s.emby == nil {
 		return
 	}
@@ -24,6 +24,11 @@ func (s *Service) processEmbyMovies(ctx context.Context, result *ProcessingResul
 	if err != nil {
 		logger.Errorf("❌ Failed to get movies from Emby: %v", err)
 		return
+	}
+
+	if before := len(embyItems); len(excludedLibIDs) > 0 {
+		embyItems = filterByLibrary(embyItems, excludedLibIDs)
+		logger.Infof("🎬 Filtered %d/%d movies by library exclusion", before-len(embyItems), before)
 	}
 
 	var orphans []emby.Item

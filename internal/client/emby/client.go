@@ -31,6 +31,24 @@ func NewClient(cfg config.EmbyConfig) *Client {
 	return &Client{client: client}
 }
 
+func (c *Client) GetLibraries(ctx context.Context) ([]VirtualFolder, error) {
+	var folders []VirtualFolder
+	r, err := c.client.R().
+		SetContext(ctx).
+		SetResult(&folders).
+		Get("/Library/VirtualFolders")
+
+	if err != nil {
+		return nil, fmt.Errorf("getting libraries: %w", err)
+	}
+
+	if r.IsError() {
+		return nil, fmt.Errorf("API error: status=%d", r.StatusCode())
+	}
+
+	return folders, nil
+}
+
 func (c *Client) GetAllSeries(ctx context.Context) ([]Item, error) {
 	var resp ItemsResponse
 	r, err := c.client.R().
@@ -38,7 +56,7 @@ func (c *Client) GetAllSeries(ctx context.Context) ([]Item, error) {
 		SetResult(&resp).
 		SetQueryParam("IncludeItemTypes", "Series").
 		SetQueryParam("Recursive", "true").
-		SetQueryParam("Fields", "ProviderIds,Path").
+		SetQueryParam("Fields", "ProviderIds,Path,ParentId").
 		Get("/Items")
 
 	if err != nil {
@@ -59,7 +77,7 @@ func (c *Client) GetAllMovies(ctx context.Context) ([]Item, error) {
 		SetResult(&resp).
 		SetQueryParam("IncludeItemTypes", "Movie").
 		SetQueryParam("Recursive", "true").
-		SetQueryParam("Fields", "ProviderIds,Path").
+		SetQueryParam("Fields", "ProviderIds,Path,ParentId").
 		Get("/Items")
 
 	if err != nil {
