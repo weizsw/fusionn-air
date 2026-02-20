@@ -122,15 +122,15 @@ func (s *Service) ProcessCleanup(ctx context.Context) (*ProcessingResult, error)
 	radarrTmdbIDs := s.processMovies(ctx, result, cfg, dryRun)
 
 	if s.emby != nil && cfg.Emby.Enabled {
-		excludedLibIDs := s.resolveExcludedLibraries(ctx, cfg)
+		libraries, excludedLibNames := s.resolveLibrariesAndExclusions(ctx, cfg)
 
 		if sonarrTvdbIDs != nil {
-			s.processEmbySeries(ctx, result, cfg, dryRun, sonarrTvdbIDs, excludedLibIDs)
+			s.processEmbySeries(ctx, result, cfg, dryRun, sonarrTvdbIDs, libraries, excludedLibNames)
 		} else {
 			logger.Warn("⚠️  Skipping Emby series cleanup — Sonarr data unavailable (would cause false orphan detection)")
 		}
 		if radarrTmdbIDs != nil {
-			s.processEmbyMovies(ctx, result, cfg, dryRun, radarrTmdbIDs, excludedLibIDs)
+			s.processEmbyMovies(ctx, result, cfg, dryRun, radarrTmdbIDs, libraries, excludedLibNames)
 		} else {
 			logger.Warn("⚠️  Skipping Emby movie cleanup — Radarr data unavailable (would cause false orphan detection)")
 		}
@@ -149,20 +149,40 @@ func (s *Service) ProcessCleanup(ctx context.Context) (*ProcessingResult, error)
 	return result, nil
 }
 
-// resolveExcludedLibraries fetches Emby libraries and resolves configured
-// exclusion names to IDs. Returns nil on failure (all items processed).
-func (s *Service) resolveExcludedLibraries(ctx context.Context, cfg *config.Config) map[string]bool {
-	if len(cfg.Emby.ExcludedLibraries) == 0 {
-		return nil
-	}
-
+// resolveLibrariesAndExclusions fetches Emby libraries and builds a map of excluded library names.
+// Returns all libraries and a map of excluded names for filtering.
+func (s *Service) resolveLibrariesAndExclusions(ctx context.Context, cfg *config.Config) ([]emby.VirtualFolder, map[string]bool) {
 	libraries, err := s.emby.GetLibraries(ctx)
 	if err != nil {
 		logger.Warnf("⚠️  Failed to fetch Emby libraries: %v — proceeding without library filtering", err)
-		return nil
+		return nil, nil
 	}
 
-	return ResolveExcludedLibraryIDs(cfg.Emby.ExcludedLibraries, libraries)
+	if len(cfg.Emby.ExcludedLibraries) == 0 {
+		return libraries, nil
+	}
+
+	// Build map of excluded library names (case-insensitive)
+	excludedNames := make(map[string]bool, len(cfg.Emby.ExcludedLibraries))
+	for _, name := range cfg.Emby.ExcludedLibraries {
+		excludedNames[name] = true
+	}
+
+	// Validate that excluded names exist and log exclusions
+	libsByName := make(map[string]bool, len(libraries))
+	for _, lib := range libraries {
+		libsByName[lib.Name] = true
+	}
+
+	for _, name := range cfg.Emby.ExcludedLibraries {
+		if !libsByName[name] {
+			logger.Warnf("⚠️  Excluded library %q not found in Emby — check spelling", name)
+		} else {
+			logger.Infof("🚫 Excluding Emby library %q from cleanup", name)
+		}
+	}
+
+	return libraries, excludedNames
 }
 
 // GetQueue returns the queue for a specific media type

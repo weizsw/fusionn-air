@@ -12,27 +12,40 @@ import (
 	"github.com/fusionn-air/pkg/logger"
 )
 
-func (s *Service) processEmbyMovies(ctx context.Context, result *ProcessingResult, cfg *config.Config, dryRun bool, radarrTmdbIDs map[int]bool, excludedLibIDs map[string]bool) {
+func (s *Service) processEmbyMovies(ctx context.Context, result *ProcessingResult, cfg *config.Config, dryRun bool, radarrTmdbIDs map[int]bool, libraries []emby.VirtualFolder, excludedLibNames map[string]bool) {
 	if s.emby == nil {
 		return
 	}
 
 	queue := s.queues[MediaTypeEmbyMovie]
 
-	logger.Info("🎬 Fetching movies from Emby...")
-	embyItems, err := s.emby.GetAllMovies(ctx)
-	if err != nil {
-		logger.Errorf("❌ Failed to get movies from Emby: %v", err)
+	// Fetch movies from each non-excluded library
+	var allMovies []emby.Item
+	for _, lib := range libraries {
+		if excludedLibNames[lib.Name] {
+			logger.Infof("📚 Skipping excluded library %q (ID: %s)", lib.Name, lib.ItemID)
+			continue
+		}
+
+		logger.Infof("🎬 Fetching movies from library %q (ID: %s)...", lib.Name, lib.ItemID)
+		movies, err := s.emby.GetMovies(ctx, lib.ItemID)
+		if err != nil {
+			logger.Errorf("❌ Failed to get movies from library %q: %v", lib.Name, err)
+			continue
+		}
+		logger.Infof("🎬 Found %d movies in library %q", len(movies), lib.Name)
+		allMovies = append(allMovies, movies...)
+	}
+
+	if len(allMovies) == 0 {
+		logger.Info("🎬 No movies found in non-excluded libraries")
 		return
 	}
 
-	if before := len(embyItems); len(excludedLibIDs) > 0 {
-		embyItems = filterByLibrary(embyItems, excludedLibIDs)
-		logger.Infof("🎬 Filtered %d/%d movies by library exclusion", before-len(embyItems), before)
-	}
+	logger.Infof("🎬 Total movies fetched: %d", len(allMovies))
 
 	var orphans []emby.Item
-	for _, item := range embyItems {
+	for _, item := range allMovies {
 		tmdbID := emby.ParseProviderID(item.ProviderIDs, "Tmdb")
 		if tmdbID == 0 {
 			logger.Warnf("Skipping Emby movie %q (no TMDB ID)", item.Name)
