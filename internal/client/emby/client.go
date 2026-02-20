@@ -49,15 +49,20 @@ func (c *Client) GetLibraries(ctx context.Context) ([]VirtualFolder, error) {
 	return folders, nil
 }
 
-func (c *Client) GetAllSeries(ctx context.Context) ([]Item, error) {
+func (c *Client) GetSeries(ctx context.Context, parentID string) ([]Item, error) {
 	var resp ItemsResponse
-	r, err := c.client.R().
+	req := c.client.R().
 		SetContext(ctx).
 		SetResult(&resp).
 		SetQueryParam("IncludeItemTypes", "Series").
 		SetQueryParam("Recursive", "true").
-		SetQueryParam("Fields", "ProviderIds,Path,ParentId").
-		Get("/Items")
+		SetQueryParam("Fields", "ProviderIds,Path,ParentId")
+
+	if parentID != "" {
+		req.SetQueryParam("ParentId", parentID)
+	}
+
+	r, err := req.Get("/Items")
 
 	if err != nil {
 		return nil, fmt.Errorf("getting series: %w", err)
@@ -70,15 +75,24 @@ func (c *Client) GetAllSeries(ctx context.Context) ([]Item, error) {
 	return resp.Items, nil
 }
 
-func (c *Client) GetAllMovies(ctx context.Context) ([]Item, error) {
+func (c *Client) GetAllSeries(ctx context.Context) ([]Item, error) {
+	return c.GetSeries(ctx, "")
+}
+
+func (c *Client) GetMovies(ctx context.Context, parentID string) ([]Item, error) {
 	var resp ItemsResponse
-	r, err := c.client.R().
+	req := c.client.R().
 		SetContext(ctx).
 		SetResult(&resp).
 		SetQueryParam("IncludeItemTypes", "Movie").
 		SetQueryParam("Recursive", "true").
-		SetQueryParam("Fields", "ProviderIds,Path,ParentId").
-		Get("/Items")
+		SetQueryParam("Fields", "ProviderIds,Path,ParentId")
+
+	if parentID != "" {
+		req.SetQueryParam("ParentId", parentID)
+	}
+
+	r, err := req.Get("/Items")
 
 	if err != nil {
 		return nil, fmt.Errorf("getting movies: %w", err)
@@ -89,6 +103,10 @@ func (c *Client) GetAllMovies(ctx context.Context) ([]Item, error) {
 	}
 
 	return resp.Items, nil
+}
+
+func (c *Client) GetAllMovies(ctx context.Context) ([]Item, error) {
+	return c.GetMovies(ctx, "")
 }
 
 func (c *Client) GetSeasons(ctx context.Context, seriesID string) ([]Item, error) {

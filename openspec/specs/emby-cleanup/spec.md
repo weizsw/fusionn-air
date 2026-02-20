@@ -20,22 +20,30 @@ The system SHALL support an optional `emby` configuration block with `enabled` (
 - **THEN** the cleanup service SHALL exclude all items in the "Anime" library from processing
 
 ### Requirement: Emby client lists all series with provider IDs
-The Emby client SHALL fetch all series from Emby with `ProviderIds` and `Path` fields included.
+The Emby client SHALL fetch series from Emby with `ProviderIds` and `Path` fields included. The client SHALL support fetching all series recursively, or series from a specific library by `ParentId`.
 
-#### Scenario: Fetch all series
-- **WHEN** the Emby client calls the Items API with `IncludeItemTypes=Series`
-- **THEN** it SHALL return all series with their Emby ID, name, provider IDs (Tvdb, Tmdb), and path
+#### Scenario: Fetch all series recursively
+- **WHEN** the Emby client calls the Items API with `IncludeItemTypes=Series&Recursive=true` and no ParentId
+- **THEN** it SHALL return all series across all libraries with their Emby ID, name, provider IDs (Tvdb, Tmdb), and path
+
+#### Scenario: Fetch series from a specific library
+- **WHEN** the Emby client calls the Items API with `IncludeItemTypes=Series&Recursive=true&ParentId={LibraryId}`
+- **THEN** it SHALL return only series within that library with their Emby ID, name, provider IDs (Tvdb, Tmdb), and path
 
 #### Scenario: Provider IDs are strings
 - **WHEN** Emby returns provider IDs as strings (e.g., `"Tvdb": "393189"`)
 - **THEN** the client SHALL convert them to integers for downstream matching
 
 ### Requirement: Emby client lists all movies with provider IDs
-The Emby client SHALL fetch all movies from Emby with `ProviderIds` and `Path` fields included.
+The Emby client SHALL fetch movies from Emby with `ProviderIds` and `Path` fields included. The client SHALL support fetching all movies recursively, or movies from a specific library by `ParentId`.
 
-#### Scenario: Fetch all movies
-- **WHEN** the Emby client calls the Items API with `IncludeItemTypes=Movie`
-- **THEN** it SHALL return all movies with their Emby ID, name, provider IDs (Tmdb, Imdb), and path
+#### Scenario: Fetch all movies recursively
+- **WHEN** the Emby client calls the Items API with `IncludeItemTypes=Movie&Recursive=true` and no ParentId
+- **THEN** it SHALL return all movies across all libraries with their Emby ID, name, provider IDs (Tmdb, Imdb), and path
+
+#### Scenario: Fetch movies from a specific library
+- **WHEN** the Emby client calls the Items API with `IncludeItemTypes=Movie&Recursive=true&ParentId={LibraryId}`
+- **THEN** it SHALL return only movies within that library with their Emby ID, name, provider IDs (Tmdb, Imdb), and path
 
 ### Requirement: Emby client lists seasons and episodes for a series
 The Emby client SHALL support fetching seasons for a series and episodes for a season, including whether each episode has a file on disk.
@@ -178,25 +186,27 @@ The Emby client SHALL support fetching the list of libraries from the Emby serve
 - **WHEN** the `/Library/VirtualFolders` API call fails
 - **THEN** the system SHALL log a warning and proceed without library filtering (all items processed)
 
-### Requirement: Items include parent library reference
-The Emby client SHALL request the `ParentId` field when fetching series and movies, so each item can be associated with its parent library.
-
-#### Scenario: Series items include ParentId
-- **WHEN** `GetAllSeries()` is called
-- **THEN** each returned item SHALL include its `ParentId` field
-
-#### Scenario: Movie items include ParentId
-- **WHEN** `GetAllMovies()` is called
-- **THEN** each returned item SHALL include its `ParentId` field
-
 ### Requirement: Library filtering occurs before orphan detection
-Items belonging to excluded libraries SHALL be filtered out before the orphan detection step (before Sonarr/Radarr ID subtraction). Filtered items never enter the orphan pipeline.
+Items from excluded libraries SHALL NOT be fetched from the Emby API. The system SHALL query each non-excluded library separately using the `ParentId` parameter, rather than fetching all items and filtering client-side.
 
-#### Scenario: Item in excluded library is not processed
-- **WHEN** a series belongs to an excluded library
-- **AND** the series is not in Sonarr
-- **THEN** the series SHALL NOT appear as an orphan and SHALL NOT be checked for watch status
+#### Scenario: Only non-excluded libraries are queried
+- **WHEN** `emby.excluded_libraries` contains `["Anime"]`
+- **AND** the Emby server has libraries "Movies", "TV Shows", and "Anime"
+- **THEN** the system SHALL make separate API requests with `ParentId` for "Movies" and "TV Shows" only
+- **AND** the system SHALL NOT make any API request for the "Anime" library
+
+#### Scenario: Item in excluded library is not fetched
+- **WHEN** a movie belongs to an excluded library
+- **THEN** the movie SHALL NOT be returned from the Emby API
+- **AND** the movie SHALL NOT appear in orphan detection
+- **AND** the movie SHALL NOT be checked for watch status
 
 #### Scenario: Item in non-excluded library proceeds normally
 - **WHEN** a movie belongs to a library not in the exclusion list
-- **THEN** the movie SHALL proceed through the normal orphan detection and watch-checking pipeline
+- **THEN** the movie SHALL be fetched via the library-scoped API call
+- **AND** the movie SHALL proceed through the normal orphan detection and watch-checking pipeline
+
+#### Scenario: All libraries processed when no exclusions configured
+- **WHEN** `emby.excluded_libraries` is empty or not set
+- **THEN** the system SHALL query each library separately using their respective `ParentId` values
+- **AND** all Emby items across all libraries SHALL be processed

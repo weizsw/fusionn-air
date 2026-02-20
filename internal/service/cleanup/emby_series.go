@@ -12,28 +12,41 @@ import (
 	"github.com/fusionn-air/pkg/logger"
 )
 
-func (s *Service) processEmbySeries(ctx context.Context, result *ProcessingResult, cfg *config.Config, dryRun bool, sonarrTvdbIDs map[int]bool, excludedLibIDs map[string]bool) {
+func (s *Service) processEmbySeries(ctx context.Context, result *ProcessingResult, cfg *config.Config, dryRun bool, sonarrTvdbIDs map[int]bool, libraries []emby.VirtualFolder, excludedLibNames map[string]bool) {
 	if s.emby == nil {
 		return
 	}
 
 	queue := s.queues[MediaTypeEmbySeries]
 
-	logger.Info("📺 Fetching series from Emby...")
-	embyItems, err := s.emby.GetAllSeries(ctx)
-	if err != nil {
-		logger.Errorf("❌ Failed to get series from Emby: %v", err)
+	// Fetch series from each non-excluded library
+	var allSeries []emby.Item
+	for _, lib := range libraries {
+		if excludedLibNames[lib.Name] {
+			logger.Infof("📚 Skipping excluded library %q (ID: %s)", lib.Name, lib.ItemID)
+			continue
+		}
+
+		logger.Infof("📺 Fetching series from library %q (ID: %s)...", lib.Name, lib.ItemID)
+		series, err := s.emby.GetSeries(ctx, lib.ItemID)
+		if err != nil {
+			logger.Errorf("❌ Failed to get series from library %q: %v", lib.Name, err)
+			continue
+		}
+		logger.Infof("📺 Found %d series in library %q", len(series), lib.Name)
+		allSeries = append(allSeries, series...)
+	}
+
+	if len(allSeries) == 0 {
+		logger.Info("📺 No series found in non-excluded libraries")
 		return
 	}
 
-	if before := len(embyItems); len(excludedLibIDs) > 0 {
-		embyItems = filterByLibrary(embyItems, excludedLibIDs)
-		logger.Infof("📺 Filtered %d/%d series by library exclusion", before-len(embyItems), before)
-	}
+	logger.Infof("📺 Total series fetched: %d", len(allSeries))
 
 	// Filter to orphans only (not in Sonarr)
 	var orphans []emby.Item
-	for _, item := range embyItems {
+	for _, item := range allSeries {
 		tvdbID := emby.ParseProviderID(item.ProviderIDs, "Tvdb")
 		if tvdbID == 0 {
 			logger.Warnf("Skipping Emby series %q (no TVDB ID)", item.Name)
