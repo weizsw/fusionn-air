@@ -207,7 +207,7 @@ func (s *Service) resolveLibrariesAndExclusions(ctx context.Context, cfg *config
 	}
 
 	if len(cfg.Emby.ExcludedLibraries) == 0 {
-		return libraries, nil
+		return libraries, make(map[string]bool)
 	}
 
 	// Build map of excluded library names (case-insensitive)
