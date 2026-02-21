@@ -176,24 +176,45 @@ The `emby` configuration block SHALL support an optional `excluded_libraries` fi
 - **AND** cleanup SHALL proceed normally for all other libraries
 
 ### Requirement: Emby client fetches library list
-The Emby client SHALL support fetching the list of libraries from the Emby server via the `/Library/VirtualFolders` API endpoint.
+The Emby client SHALL support fetching the list of libraries from the Emby server via the `/Library/VirtualFolders` API endpoint, including the `CollectionType` field for each library.
 
-#### Scenario: Fetch libraries successfully
+#### Scenario: Fetch libraries successfully with CollectionType
 - **WHEN** the client calls `GetLibraries()`
-- **THEN** it SHALL return a list of libraries with their name and item ID
+- **THEN** it SHALL return a list of libraries with their name, item ID, and CollectionType
 
 #### Scenario: Library fetch fails
 - **WHEN** the `/Library/VirtualFolders` API call fails
 - **THEN** the system SHALL log a warning and proceed without library filtering (all items processed)
 
 ### Requirement: Library filtering occurs before orphan detection
-Items from excluded libraries SHALL NOT be fetched from the Emby API. The system SHALL query each non-excluded library separately using the `ParentId` parameter, rather than fetching all items and filtering client-side.
+Items SHALL be fetched from libraries based on CollectionType matching. The system SHALL query each non-excluded library with matching CollectionType using the `ParentId` parameter.
 
-#### Scenario: Only non-excluded libraries are queried
+#### Scenario: Only movie libraries are queried for movie cleanup
+- **WHEN** processing Emby movies
+- **AND** the Emby server has libraries "Movies" (CollectionType: "movies"), "TV Shows" (CollectionType: "tvshows"), and "Anime" (CollectionType: "movies")
+- **THEN** the system SHALL make API requests with `ParentId` for "Movies" and "Anime" only
+- **AND** the system SHALL NOT make any movie API request for the "TV Shows" library
+
+#### Scenario: Only TV show libraries are queried for series cleanup
+- **WHEN** processing Emby series
+- **AND** the Emby server has libraries "Movies" (CollectionType: "movies") and "TV Shows" (CollectionType: "tvshows")
+- **THEN** the system SHALL make API requests with `ParentId` for "TV Shows" only
+- **AND** the system SHALL NOT make any series API request for the "Movies" library
+
+#### Scenario: Excluded libraries are skipped before type checking
 - **WHEN** `emby.excluded_libraries` contains `["Anime"]`
-- **AND** the Emby server has libraries "Movies", "TV Shows", and "Anime"
-- **THEN** the system SHALL make separate API requests with `ParentId` for "Movies" and "TV Shows" only
-- **AND** the system SHALL NOT make any API request for the "Anime" library
+- **AND** "Anime" is a movie library
+- **THEN** the system SHALL skip the library before checking CollectionType
+- **AND** the system SHALL NOT make any API request for "Anime"
+
+#### Scenario: Libraries with unsupported CollectionType are skipped
+- **WHEN** processing a library with `CollectionType: "music"`
+- **THEN** the system SHALL skip the library with a debug log
+- **AND** no orphan detection SHALL occur for that library
+
+#### Scenario: Empty CollectionType libraries are skipped
+- **WHEN** processing a library with empty or missing CollectionType
+- **THEN** the system SHALL skip the library with a debug log indicating mixed content is not supported
 
 #### Scenario: Item in excluded library is not fetched
 - **WHEN** a movie belongs to an excluded library
@@ -206,7 +227,7 @@ Items from excluded libraries SHALL NOT be fetched from the Emby API. The system
 - **THEN** the movie SHALL be fetched via the library-scoped API call
 - **AND** the movie SHALL proceed through the normal orphan detection and watch-checking pipeline
 
-#### Scenario: All libraries processed when no exclusions configured
+#### Scenario: All appropriate libraries processed when no exclusions configured
 - **WHEN** `emby.excluded_libraries` is empty or not set
-- **THEN** the system SHALL query each library separately using their respective `ParentId` values
-- **AND** all Emby items across all libraries SHALL be processed
+- **THEN** the system SHALL query each library matching the current media type (movies or tvshows)
+- **AND** all matching Emby items across matching libraries SHALL be processed
