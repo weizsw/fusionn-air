@@ -124,15 +124,63 @@ func (s *Service) ProcessCleanup(ctx context.Context) (*ProcessingResult, error)
 	if s.emby != nil && cfg.Emby.Enabled {
 		libraries, excludedLibNames := s.resolveLibrariesAndExclusions(ctx, cfg)
 
-		if sonarrTvdbIDs != nil {
-			s.processEmbySeries(ctx, result, cfg, dryRun, sonarrTvdbIDs, libraries, excludedLibNames)
-		} else {
-			logger.Warn("⚠️  Skipping Emby series cleanup — Sonarr data unavailable (would cause false orphan detection)")
+		// Aggregate items by type from all libraries
+		var allMovies []emby.Item
+		var allSeries []emby.Item
+
+		for _, lib := range libraries {
+			if excludedLibNames[lib.Name] {
+				logger.Infof("📚 Skipping excluded library %q (ID: %s)", lib.Name, lib.ItemID)
+				continue
+			}
+
+			switch lib.CollectionType {
+			case "movies":
+				if radarrTmdbIDs == nil {
+					logger.Warnf("⚠️  Skipping movie library %q - Radarr data unavailable", lib.Name)
+					continue
+				}
+				movies, err := s.emby.GetMovies(ctx, lib.ItemID)
+				if err != nil {
+					logger.Errorf("❌ Failed to get movies from library %q: %v", lib.Name, err)
+					continue
+				}
+				logger.Infof("🎬 Found %d movies in library %q", len(movies), lib.Name)
+				allMovies = append(allMovies, movies...)
+
+			case "tvshows":
+				if sonarrTvdbIDs == nil {
+					logger.Warnf("⚠️  Skipping TV library %q - Sonarr data unavailable", lib.Name)
+					continue
+				}
+				series, err := s.emby.GetSeries(ctx, lib.ItemID)
+				if err != nil {
+					logger.Errorf("❌ Failed to get series from library %q: %v", lib.Name, err)
+					continue
+				}
+				logger.Infof("📺 Found %d series in library %q", len(series), lib.Name)
+				allSeries = append(allSeries, series...)
+
+			default:
+				if lib.CollectionType != "" {
+					logger.Debugf("📚 Skipping library %q (unsupported type: %s)", lib.Name, lib.CollectionType)
+				} else {
+					logger.Debugf("📚 Skipping library %q (mixed content not supported)", lib.Name)
+				}
+			}
 		}
-		if radarrTmdbIDs != nil {
-			s.processEmbyMovies(ctx, result, cfg, dryRun, radarrTmdbIDs, libraries, excludedLibNames)
-		} else {
-			logger.Warn("⚠️  Skipping Emby movie cleanup — Radarr data unavailable (would cause false orphan detection)")
+
+		// Process aggregated items (fetches Trakt data once per type)
+		if len(allMovies) > 0 {
+			s.processEmbyMovieItems(ctx, result, cfg, dryRun, radarrTmdbIDs, allMovies)
+		} else if radarrTmdbIDs != nil {
+			logger.Info("🎬 No movies found in non-excluded movie libraries")
+		}
+
+		if len(allSeries) > 0 {
+			s.processEmbySeriesItems(ctx, result, cfg, dryRun, sonarrTvdbIDs, allSeries)
+		} else if sonarrTvdbIDs != nil {
+			logger.Info("📺 No series found in non-excluded TV libraries")
 		}
 	}
 
