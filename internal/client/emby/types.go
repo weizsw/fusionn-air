@@ -20,8 +20,9 @@ type Item struct {
 }
 
 type VirtualFolder struct {
-	Name   string `json:"Name"`
-	ItemID string `json:"ItemId"`
+	Name           string `json:"Name"`
+	ItemID         string `json:"ItemId"`
+	CollectionType string `json:"CollectionType"`
 }
 
 type ProviderIDs struct {
