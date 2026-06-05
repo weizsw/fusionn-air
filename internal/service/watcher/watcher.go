@@ -376,7 +376,9 @@ func shouldRequestSeason(progress *trakt.ShowProgress, seasons []trakt.SeasonSum
 	// Build map of total episode counts per season
 	totalEps := make(map[int]int)
 	for _, s := range seasons {
-		totalEps[s.Number] = s.EpisodeCount
+		if s.EpisodeCount > 0 {
+			totalEps[s.Number] = s.EpisodeCount
+		}
 	}
 
 	// Find the target season in progress
@@ -388,13 +390,18 @@ func shouldRequestSeason(progress *trakt.ShowProgress, seasons []trakt.SeasonSum
 		}
 	}
 
+	if isHiddenSeason(progress, targetSeason) {
+		return false, fmt.Sprintf("S%02d hidden on Trakt", targetSeason)
+	}
+
 	// If user has already watched any episodes of target season, it's already available
 	if targetSeasonProgress != nil && targetSeasonProgress.Completed > 0 {
-		total := totalEps[targetSeason]
-		if total == 0 {
-			total = targetSeasonProgress.Aired // fallback to aired if no total
+		total, totalKnown := totalEps[targetSeason]
+		if !totalKnown {
+			return false, fmt.Sprintf("watching S%02d (%d eps watched, total unknown, %d aired)",
+				targetSeason, targetSeasonProgress.Completed, targetSeasonProgress.Aired)
 		}
-		if targetSeasonProgress.Completed >= targetSeasonProgress.Aired {
+		if targetSeasonProgress.Completed >= total {
 			return false, fmt.Sprintf("S%02d complete (%d/%d eps, %d aired)",
 				targetSeason, targetSeasonProgress.Completed, total, targetSeasonProgress.Aired)
 		}
@@ -413,7 +420,7 @@ func shouldRequestSeason(progress *trakt.ShowProgress, seasons []trakt.SeasonSum
 		// No S01 in progress - check if they've only watched specials (S00)
 		for _, sp := range progress.Seasons {
 			if sp.Number == 0 && sp.Completed > 0 {
-				return true, "watched specials only"
+				return false, "no S01 watch history"
 			}
 		}
 
@@ -431,6 +438,10 @@ func shouldRequestSeason(progress *trakt.ShowProgress, seasons []trakt.SeasonSum
 		}
 	}
 
+	if isHiddenSeason(progress, prevSeason) {
+		return false, fmt.Sprintf("S%02d hidden on Trakt", prevSeason)
+	}
+
 	if prevSeasonProgress == nil {
 		return false, fmt.Sprintf("S%02d not watched", prevSeason)
 	}
@@ -439,16 +450,31 @@ func shouldRequestSeason(progress *trakt.ShowProgress, seasons []trakt.SeasonSum
 		return false, fmt.Sprintf("S%02d not aired", prevSeason)
 	}
 
+	total, totalKnown := totalEps[prevSeason]
+	if !totalKnown {
+		return false, fmt.Sprintf("S%02d total episode count unknown", prevSeason)
+	}
+
 	if prevSeasonProgress.Completed < prevSeasonProgress.Aired {
-		total := totalEps[prevSeason]
-		if total == 0 {
-			total = prevSeasonProgress.Aired
-		}
 		return false, fmt.Sprintf("S%02d incomplete (%d/%d eps, %d aired)",
 			prevSeason, prevSeasonProgress.Completed, total, prevSeasonProgress.Aired)
 	}
 
+	if total > prevSeasonProgress.Aired {
+		return false, fmt.Sprintf("S%02d ongoing (%d/%d eps, %d aired)",
+			prevSeason, prevSeasonProgress.Completed, total, prevSeasonProgress.Aired)
+	}
+
 	return true, fmt.Sprintf("S%02d complete", prevSeason)
+}
+
+func isHiddenSeason(progress *trakt.ShowProgress, seasonNum int) bool {
+	for _, season := range progress.HiddenSeasons {
+		if season.Number == seasonNum {
+			return true
+		}
+	}
+	return false
 }
 
 // GetLastRun returns the last run time and results
