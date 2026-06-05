@@ -37,3 +37,6 @@ data/
 # Build
 dist/
 bin/
+
+.codegraph/
+.cursor/
