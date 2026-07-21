@@ -125,6 +125,11 @@ watcher:
   # Trakt API max is 33 days
   calendar_days: 14
 
+  # Skip animated and non-English series before making any request.
+  # Empty lists disable their filter. Missing metadata is skipped when enabled.
+  excluded_genres: ["animation", "anime", "donghua"]
+  allowed_languages: ["en"]
+
   # ── Routing (Optional) ──────────────────────────────────────────────────
   # Route requests to different Overseerr backend servers based on genre
   # or country of origin. Useful when you have separate servers for anime,

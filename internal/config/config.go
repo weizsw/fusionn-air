@@ -66,9 +66,11 @@ type SchedulerConfig struct {
 }
 
 type WatcherConfig struct {
-	Enabled      bool          `mapstructure:"enabled"`
-	CalendarDays int           `mapstructure:"calendar_days"` // Days ahead to check for new episodes
-	Routing      RoutingConfig `mapstructure:"routing"`
+	Enabled          bool          `mapstructure:"enabled"`
+	CalendarDays     int           `mapstructure:"calendar_days"` // Days ahead to check for new episodes
+	ExcludedGenres   []string      `mapstructure:"excluded_genres"`
+	AllowedLanguages []string      `mapstructure:"allowed_languages"`
+	Routing          RoutingConfig `mapstructure:"routing"`
 }
 
 type RoutingConfig struct {
@@ -96,6 +98,7 @@ type AppriseConfig struct {
 //
 // Hot-reloadable settings (no restart needed):
 //   - scheduler.dry_run, watcher.calendar_days
+//   - watcher.excluded_genres, watcher.allowed_languages, watcher.routing
 //   - cleanup.delay_days, cleanup.exclusions
 //
 // Requires restart:

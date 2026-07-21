@@ -177,6 +177,8 @@ scheduler:
 watcher:
   enabled: true           # Enable watcher feature
   calendar_days: 14       # Days ahead to check for upcoming episodes
+  excluded_genres: ["animation", "anime", "donghua"]
+  allowed_languages: ["en"] # Original languages; empty disables filtering
 
 cleanup:
   enabled: false          # Enable cleanup feature
@@ -280,6 +282,12 @@ docker run -d \
 ┌─────────────────┐
 │  Trakt Calendar │
 └────────┬────────┘
+         ▼
+┌─────────────────┐     No      ┌──────────┐
+│ Genre/language  ├────────────►│  Skip    │
+│ eligible?       │             └──────────┘
+└────────┬────────┘
+         │ Yes
          ▼
 ┌─────────────────┐     No      ┌──────────┐
 │ Previous season ├────────────►│  Skip    │
