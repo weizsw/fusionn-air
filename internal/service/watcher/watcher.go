@@ -2,6 +2,7 @@ package watcher
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -14,13 +15,37 @@ import (
 	"github.com/fusionn-air/pkg/logger"
 )
 
-// Service handles the core logic of checking calendar and requesting shows
-type Service struct {
-	trakt     *trakt.Client
-	overseerr *overseerr.Client
-	apprise   *apprise.Client
-	cfgMgr    *config.Manager
+var ErrAlreadyRunning = errors.New("watcher is already running")
 
+type traktAdapter interface {
+	GetMyShowsCalendar(context.Context, int) ([]trakt.CalendarShow, error)
+	GetShowProgress(context.Context, int) (*trakt.ShowProgress, error)
+	GetShowSeasons(context.Context, int) ([]trakt.SeasonSummary, error)
+}
+
+type overseerrAdapter interface {
+	GetTVByTMDB(context.Context, int) (*overseerr.TVDetails, error)
+	GetSeasonRequestInfo(*overseerr.TVDetails, int) overseerr.SeasonRequestInfo
+	RequestTV(context.Context, int, []int, *int) (*overseerr.RequestResponse, error)
+}
+
+type notificationAdapter interface {
+	IsEnabled() bool
+	Notify(context.Context, string, string, string) error
+}
+
+type configSource interface {
+	Get() *config.Config
+}
+
+// Service handles the core logic of checking calendar and requesting shows.
+type Service struct {
+	trakt     traktAdapter
+	overseerr overseerrAdapter
+	apprise   notificationAdapter
+	cfgMgr    configSource
+
+	runMu       sync.Mutex
 	mu          sync.RWMutex
 	lastRun     time.Time
 	lastResults []ProcessResult
@@ -40,16 +65,24 @@ type ProcessResult struct {
 }
 
 func NewService(traktClient *trakt.Client, overseerrClient *overseerr.Client, appriseClient *apprise.Client, cfgMgr *config.Manager) *Service {
-	return &Service{
-		trakt:     traktClient,
-		overseerr: overseerrClient,
-		apprise:   appriseClient,
-		cfgMgr:    cfgMgr,
+	var notification notificationAdapter
+	if appriseClient != nil {
+		notification = appriseClient
 	}
+	return newService(traktClient, overseerrClient, notification, cfgMgr)
+}
+
+func newService(traktClient traktAdapter, overseerrClient overseerrAdapter, appriseClient notificationAdapter, cfgMgr configSource) *Service {
+	return &Service{trakt: traktClient, overseerr: overseerrClient, apprise: appriseClient, cfgMgr: cfgMgr}
 }
 
 // ProcessCalendar checks the calendar and requests new seasons as needed
 func (s *Service) ProcessCalendar(ctx context.Context) ([]ProcessResult, error) {
+	if !s.runMu.TryLock() {
+		return nil, ErrAlreadyRunning
+	}
+	defer s.runMu.Unlock()
+
 	// Get fresh config for this run (supports hot-reload)
 	cfg := s.cfgMgr.Get()
 	dryRun := cfg.Scheduler.DryRun

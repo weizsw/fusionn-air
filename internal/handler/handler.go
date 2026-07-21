@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -83,6 +84,10 @@ func (h *Handler) TriggerWatcher(c *gin.Context) {
 	}
 
 	results, err := h.watcher.ProcessCalendar(c.Request.Context())
+	if errors.Is(err, watcher.ErrAlreadyRunning) {
+		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		return
+	}
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": err.Error(),
@@ -142,6 +147,10 @@ func (h *Handler) TriggerCleanup(c *gin.Context) {
 	}
 
 	results, err := h.cleanup.ProcessCleanup(c.Request.Context())
+	if errors.Is(err, cleanup.ErrAlreadyRunning) {
+		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		return
+	}
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": err.Error(),

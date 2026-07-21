@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/fusionn-air/internal/client/sonarr"
 	"github.com/fusionn-air/internal/client/trakt"
@@ -12,19 +11,24 @@ import (
 	"github.com/fusionn-air/pkg/logger"
 )
 
-func (s *Service) processSeries(ctx context.Context, result *ProcessingResult, cfg *config.Config, dryRun bool) (sonarrTvdbIDs map[int]bool) {
+func (s *Service) processSeries(ctx context.Context, result *ProcessingResult, cfg *config.Config, dryRun bool) (sonarrTvdbIDs map[int]bool, runErr error) {
 	if s.sonarr == nil {
 		logger.Debug("Sonarr client not configured, skipping series cleanup")
-		return nil
+		return nil, nil
 	}
 
 	queue := s.queues[MediaTypeSeries]
+	if err := retryPendingUnmonitor(queue, result, MediaTypeSeries, dryRun, func(item *QueueItem) (bool, error) {
+		return s.unmonitorSeries(ctx, item.ID, item.Title, queue)
+	}); err != nil {
+		return nil, err
+	}
 
 	logger.Info("📺 Fetching series from Sonarr...")
 	series, err := s.sonarr.GetAllSeries(ctx)
 	if err != nil {
 		logger.Errorf("❌ Failed to get series from Sonarr: %v", err)
-		return nil
+		return nil, nil
 	}
 
 	sonarrTvdbIDs = make(map[int]bool, len(series))
@@ -40,9 +44,9 @@ func (s *Service) processSeries(ctx context.Context, result *ProcessingResult, c
 	// Get watched shows from Trakt
 	logger.Info("👁️  Fetching TV watch history from Trakt...")
 	watchedShows, err := s.trakt.GetWatchedShows(ctx)
+	watchedAvailable := err == nil
 	if err != nil {
 		logger.Errorf("❌ Failed to get watched shows: %v", err)
-		return
 	}
 
 	// Build lookup by TVDB ID
@@ -53,69 +57,51 @@ func (s *Service) processSeries(ctx context.Context, result *ProcessingResult, c
 		}
 	}
 
-	// Process each series
 	for _, ser := range series {
-		res := s.processOneSeries(ctx, &ser, watchedByTvdb, queue, cfg)
-		// Unmonitor if newly queued
-		if res.Action == "queued" && res.Reason != "" && strings.HasSuffix(res.Reason, "added to queue") {
-			s.unmonitorSeries(ctx, ser.ID, ser.Title, queue, dryRun)
+		existing := queue.Get(ser.ID) != nil
+		if !existing && !watchedAvailable {
+			continue
 		}
-		// Only add non-empty results (skip items ready for removal)
+		res, err := s.processOneSeries(ctx, &ser, watchedByTvdb, queue, cfg, dryRun)
+		if !existing && !dryRun && err == nil && res.Action == "queued" && queue.NeedsUnmonitor(ser.ID) {
+			unmonitored, persistErr := s.unmonitorSeries(ctx, ser.ID, ser.Title, queue)
+			if persistErr != nil {
+				res.Action = "error"
+				res.Reason = persistErr.Error()
+				err = persistErr
+			} else if unmonitored {
+				res.Reason = queue.Get(ser.ID).Reason + " - queued for deletion (unmonitored)"
+			} else {
+				res.Reason = queue.Get(ser.ID).Reason + " - pending unmonitor"
+			}
+		}
 		if res.ID != 0 {
 			result.AddResult(res)
 		}
+		if err != nil {
+			return sonarrTvdbIDs, fmt.Errorf("process series %q: %w", ser.Title, err)
+		}
 	}
 
-	s.processSeriesRemovalQueue(ctx, result, queue, cfg, dryRun)
-	return
+	if err := s.processSeriesRemovalQueue(ctx, result, queue, cfg, dryRun); err != nil {
+		return sonarrTvdbIDs, err
+	}
+	return sonarrTvdbIDs, nil
 }
 
-func (s *Service) processOneSeries(ctx context.Context, ser *sonarr.Series, watchedByTvdb map[int]*trakt.WatchedShow, queue *Queue, cfg *config.Config) MediaResult {
-	res := MediaResult{
-		Type:       MediaTypeSeries,
-		Title:      ser.Title,
-		ID:         ser.ID,
-		SizeOnDisk: sonarr.FormatSize(ser.Statistics.SizeOnDisk),
-	}
-
-	// Check exclusions
+func (s *Service) processOneSeries(ctx context.Context, ser *sonarr.Series, watchedByTvdb map[int]*trakt.WatchedShow, queue *Queue, cfg *config.Config, dryRun bool) (MediaResult, error) {
+	res := MediaResult{Type: MediaTypeSeries, Title: ser.Title, ID: ser.ID, SizeOnDisk: sonarr.FormatSize(ser.Statistics.SizeOnDisk)}
 	if isExcluded(ser.Title, cfg.Cleanup.Exclusions) {
-		res.Action = "skipped"
-		res.Reason = "in exclusion list"
-		return res
+		res.Action, res.Reason = "skipped", "in exclusion list"
+		return res, nil
 	}
-
-	// Check if already in queue (before checking monitored status)
-	// This ensures queued items remain visible even after being unmonitored
-	// However, skip items that are ready for removal - they'll appear in REMOVED section
-	if queue.IsQueued(ser.ID) {
-		// If item is ready for removal, skip it here so it doesn't appear twice
-		// It will be processed by processSeriesRemovalQueue and appear as "removed"
-		if queue.IsReadyForRemoval(ser.ID, cfg.Cleanup.DelayDays) {
-			// Return empty result - this item will be handled by removal queue
-			return MediaResult{}
-		}
-
-		queueItem := queue.Get(ser.ID)
-		daysInQueue := int(time.Since(queueItem.MarkedAt).Hours() / 24)
-		daysUntil := cfg.Cleanup.DelayDays - daysInQueue
-		if daysUntil < 0 {
-			daysUntil = 0
-		}
-		res.Action = "queued"
-		res.Reason = queueItem.Reason + " - queued for deletion (unmonitored)"
-		res.DaysUntil = daysUntil
-		return res
+	if queued, found := existingCandidateResult(queue, ser.ID, cfg.Cleanup.DelayDays, res, " - queued for deletion (unmonitored)"); found {
+		return queued, nil
 	}
-
-	// Check if series is monitored
 	if !ser.Monitored {
-		res.Action = "skipped"
-		res.Reason = "not monitored"
-		return res
+		res.Action, res.Reason = "skipped", "not monitored"
+		return res, nil
 	}
-
-	// Check if series has any files
 	if ser.Statistics.EpisodeFileCount == 0 {
 		res.Action = "skipped"
 		if ser.Status == sonarr.StatusUpcoming || ser.Statistics.EpisodeCount == 0 {
@@ -123,124 +109,48 @@ func (s *Service) processOneSeries(ctx context.Context, ser *sonarr.Series, watc
 		} else {
 			res.Reason = "no files on disk"
 		}
-		return res
+		return res, nil
 	}
 
-	// Find in Trakt watched shows
 	watched, found := watchedByTvdb[ser.TvdbID]
 	if !found {
-		res.Action = "skipped"
-		res.Reason = "no watch history"
-		return res
+		res.Action, res.Reason = "skipped", "no watch history"
+		return res, nil
 	}
-
-	// Get detailed progress from Trakt
 	progress, err := s.trakt.GetShowProgress(ctx, watched.Show.IDs.Trakt)
 	if err != nil {
-		res.Action = "error"
-		res.Reason = fmt.Sprintf("trakt error: %v", err)
-		return res
+		res.Action, res.Reason = "error", fmt.Sprintf("trakt error: %v", err)
+		return res, nil
 	}
-
-	// Get season info for total episode counts
 	seasons, _ := s.trakt.GetShowSeasons(ctx, watched.Show.IDs.Trakt)
-
-	// Check if user has watched all episodes that are ON DISK
 	watchedOnDisk, unwatchedSeasons := checkWatchedOnDisk(ser, progress)
 	if !watchedOnDisk {
-		res.Action = "skipped"
-		res.Reason = buildWatchingReason(progress, seasons, unwatchedSeasons)
-		return res
+		res.Action, res.Reason = "skipped", buildWatchingReason(progress, seasons, unwatchedSeasons)
+		return res, nil
+	}
+	if moreEpisodesComing, reason := checkMoreEpisodesComing(ser, progress, seasons); moreEpisodesComing {
+		res.Action, res.Reason = "skipped", reason
+		return res, nil
 	}
 
-	// Check if more episodes are coming
-	moreEpisodesComing, ongoingReason := checkMoreEpisodesComing(ser, progress, seasons)
-	if moreEpisodesComing {
-		if queue.IsQueued(ser.ID) {
-			queue.Remove(ser.ID)
-			logger.Debugf("Removed %s from queue - more episodes coming", ser.Title)
-		}
-		res.Action = "skipped"
-		res.Reason = ongoingReason
-		return res
-	}
-
-	// All episodes on disk are watched and no more coming
-	seasonsOnDisk := getSeasonsWithFiles(ser)
-	watchedReason := fmt.Sprintf("fully watched (S%s)", formatSeasons(seasonsOnDisk))
-
-	// Add to queue
-	queue.Add(&QueueItem{
-		ID:         ser.ID,
-		ExternalID: ser.TvdbID,
-		Title:      ser.Title,
-		MarkedAt:   time.Now(),
-		Reason:     watchedReason,
-		SizeOnDisk: ser.Statistics.SizeOnDisk,
-	})
-
-	res.Action = "queued"
-	res.Reason = watchedReason + " - queued for deletion (unmonitored)"
-	res.DaysUntil = cfg.Cleanup.DelayDays
-	return res
+	watchedReason := fmt.Sprintf("fully watched (S%s)", formatSeasons(getSeasonsWithFiles(ser)))
+	return scheduleCandidate(queue, &QueueItem{
+		ID: ser.ID, ExternalID: ser.TvdbID, Title: ser.Title,
+		Reason: watchedReason, SizeOnDisk: ser.Statistics.SizeOnDisk,
+	}, cfg.Cleanup.DelayDays, dryRun, res, " - queued for deletion (unmonitored)")
 }
 
-func (s *Service) processSeriesRemovalQueue(ctx context.Context, result *ProcessingResult, queue *Queue, cfg *config.Config, dryRun bool) {
-	ready := queue.GetReadyForRemoval(cfg.Cleanup.DelayDays)
-	if len(ready) == 0 {
-		return
-	}
-
-	logger.Infof("🗑️  %d series ready for removal", len(ready))
-
-	for _, item := range ready {
-		ser, err := s.sonarr.GetSeries(ctx, item.ID)
-		if err != nil {
-			logger.Errorf("❌ Error checking series %s: %v", item.Title, err)
-			continue
-		}
-
-		if ser == nil {
-			logger.Infof("ℹ️  %s already removed, clearing from queue", item.Title)
-			queue.Remove(item.ID)
-			continue
-		}
-
-		if dryRun {
-			logger.Warnf("🗑️  [DRY RUN] Would delete: %s (%s)", item.Title, sonarr.FormatSize(item.SizeOnDisk))
-			result.AddResult(MediaResult{
-				Type:       MediaTypeSeries,
-				Title:      item.Title,
-				ID:         item.ID,
-				Action:     "dry_run_remove",
-				Reason:     "would be deleted",
-				SizeOnDisk: sonarr.FormatSize(item.SizeOnDisk),
-			})
-		} else {
-			if err := s.sonarr.DeleteSeries(ctx, item.ID, true); err != nil {
-				logger.Errorf("❌ Failed to delete %s: %v", item.Title, err)
-				result.AddResult(MediaResult{
-					Type:   MediaTypeSeries,
-					Title:  item.Title,
-					ID:     item.ID,
-					Action: "error",
-					Reason: fmt.Sprintf("delete failed: %v", err),
-				})
-				continue
+func (s *Service) processSeriesRemovalQueue(ctx context.Context, result *ProcessingResult, queue *Queue, cfg *config.Config, dryRun bool) error {
+	return processReadyCandidates(ctx, result, queue, cfg.Cleanup.DelayDays, cfg.Cleanup.Exclusions, dryRun, removalPlan{
+		mediaType: MediaTypeSeries, label: "series", removedReason: "deleted", formatSize: sonarr.FormatSize,
+		remove: func(ctx context.Context, item *QueueItem) (bool, error) {
+			series, err := s.sonarr.GetSeries(ctx, item.ID)
+			if err != nil || series == nil {
+				return false, err
 			}
-			logger.Infof("✅ Deleted: %s (%s freed)", item.Title, sonarr.FormatSize(item.SizeOnDisk))
-			result.AddResult(MediaResult{
-				Type:       MediaTypeSeries,
-				Title:      item.Title,
-				ID:         item.ID,
-				Action:     "removed",
-				Reason:     "deleted",
-				SizeOnDisk: sonarr.FormatSize(item.SizeOnDisk),
-			})
-		}
-
-		queue.Remove(item.ID)
-	}
+			return true, s.sonarr.DeleteSeries(ctx, item.ID, true)
+		},
+	})
 }
 
 // checkWatchedOnDisk checks if user has watched all episodes on disk
@@ -364,18 +274,14 @@ func getSeasonsWithFiles(ser *sonarr.Series) []int {
 	return seasons
 }
 
-// unmonitorSeries unmonitors a series in Sonarr when it's added to the cleanup queue
-func (s *Service) unmonitorSeries(ctx context.Context, seriesID int, title string, queue *Queue, dryRun bool) {
-	if dryRun {
-		logger.Warnf("🔕 [DRY RUN] Would unmonitor series: %s (queued for deletion)", title)
-		return
-	}
-
+func (s *Service) unmonitorSeries(ctx context.Context, seriesID int, title string, queue *Queue) (bool, error) {
 	if err := s.sonarr.UnmonitorSeries(ctx, seriesID); err != nil {
 		logger.Warnf("⚠️  Failed to unmonitor %s: %v", title, err)
-		return
+		return false, nil
 	}
-
+	if err := queue.MarkUnmonitored(seriesID); err != nil {
+		return false, fmt.Errorf("unmonitored %q but queue persistence failed: %w", title, err)
+	}
 	logger.Infof("🔕 Unmonitored series: %s (queued for deletion)", title)
-	queue.MarkUnmonitored(seriesID)
+	return true, nil
 }

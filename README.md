@@ -182,7 +182,7 @@ watcher:
 
 cleanup:
   enabled: false          # Enable cleanup feature
-  delay_days: 3           # Days to wait after fully watched before removing
+  delay_days: 3           # Days after unmonitoring (or Emby queueing) before removal
   exclusions: []          # Titles to never remove (works for both shows and movies)
 
 apprise:

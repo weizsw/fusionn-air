@@ -109,7 +109,10 @@ func main() {
 			}
 		}
 
-		cleanupService = cleanup.NewService(sonarrClient, radarrClient, embyClient, traktClient, appriseClient, cfgMgr)
+		cleanupService, err = cleanup.NewService(sonarrClient, radarrClient, embyClient, traktClient, appriseClient, cfgMgr)
+		if err != nil {
+			logger.Fatalf("❌ Cleanup state error: %v", err)
+		}
 		logger.Infof("🧹 Cleanup: enabled (delay=%d days)", cfg.Cleanup.DelayDays)
 	} else {
 		logger.Info("🧹 Cleanup: disabled")
