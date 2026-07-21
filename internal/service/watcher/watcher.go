@@ -85,11 +85,10 @@ func (s *Service) ProcessCalendar(ctx context.Context) ([]ProcessResult, error) 
 	logger.Info("")
 
 	var results []ProcessResult
-	routing := cfg.Watcher.Routing
 
 	// Process each show/season silently
 	for _, item := range showSeasons {
-		result := s.processShow(ctx, item, dryRun, routing)
+		result := s.processShow(ctx, item, dryRun, cfg.Watcher)
 		results = append(results, result)
 	}
 
@@ -232,8 +231,6 @@ type calendarItem struct {
 	season  int
 	episode int
 	airDate time.Time
-	genres  []string
-	country string
 }
 
 func (s *Service) groupByShowAndSeason(items []trakt.CalendarShow) map[string]calendarItem {
@@ -247,8 +244,6 @@ func (s *Service) groupByShowAndSeason(items []trakt.CalendarShow) map[string]ca
 				season:  item.Episode.Season,
 				episode: item.Episode.Number,
 				airDate: item.FirstAired,
-				genres:  item.Show.Genres,
-				country: item.Show.Country,
 			}
 		}
 	}
@@ -256,7 +251,32 @@ func (s *Service) groupByShowAndSeason(items []trakt.CalendarShow) map[string]ca
 	return result
 }
 
-func (s *Service) processShow(ctx context.Context, item calendarItem, dryRun bool, routing config.RoutingConfig) ProcessResult {
+func exclusionReason(show trakt.Show, cfg config.WatcherConfig) string {
+	if len(cfg.ExcludedGenres) > 0 && len(show.Genres) == 0 {
+		return "genres unknown"
+	}
+	for _, genre := range show.Genres {
+		for _, excluded := range cfg.ExcludedGenres {
+			if strings.EqualFold(genre, excluded) {
+				return "excluded genre: " + genre
+			}
+		}
+	}
+	if len(cfg.AllowedLanguages) > 0 {
+		if show.Language == "" {
+			return "language unknown"
+		}
+		for _, allowed := range cfg.AllowedLanguages {
+			if strings.EqualFold(show.Language, allowed) {
+				return ""
+			}
+		}
+		return "language not allowed: " + show.Language
+	}
+	return ""
+}
+
+func (s *Service) processShow(ctx context.Context, item calendarItem, dryRun bool, cfg config.WatcherConfig) ProcessResult {
 	result := ProcessResult{
 		ShowTitle: item.show.Title,
 		ShowTMDB:  item.show.IDs.TMDB,
@@ -265,8 +285,14 @@ func (s *Service) processShow(ctx context.Context, item calendarItem, dryRun boo
 		AirDate:   item.airDate,
 	}
 
+	if reason := exclusionReason(item.show, cfg); reason != "" {
+		result.Action = "skipped"
+		result.Reason = reason
+		return result
+	}
+
 	// Determine routing
-	serverID, route := determineServerID(item.genres, item.country, routing)
+	serverID, route := determineServerID(item.show.Genres, item.show.Country, cfg.Routing)
 	result.Route = route
 
 	// Skip if no TMDB ID (can't request without it)

@@ -1,10 +1,77 @@
 package watcher
 
 import (
+	"context"
 	"testing"
 
 	"github.com/fusionn-air/internal/client/trakt"
+	"github.com/fusionn-air/internal/config"
 )
+
+func TestExclusionReasonRejectsConfiguredGenre(t *testing.T) {
+	show := trakt.Show{Genres: []string{"Drama", "Animation"}, Language: "ja"}
+	cfg := config.WatcherConfig{
+		ExcludedGenres:   []string{"animation"},
+		AllowedLanguages: []string{"en"},
+	}
+
+	if got := exclusionReason(show, cfg); got != "excluded genre: Animation" {
+		t.Fatalf("exclusionReason() = %q, want %q", got, "excluded genre: Animation")
+	}
+
+	show.Language = "en"
+	cfg.ExcludedGenres = []string{"anim"}
+	if got := exclusionReason(show, cfg); got != "" {
+		t.Fatalf("exclusionReason() with partial genre = %q, want eligible series", got)
+	}
+}
+
+func TestExclusionReasonRejectsDisallowedOriginalLanguage(t *testing.T) {
+	show := trakt.Show{Genres: []string{"drama"}, Language: "ko"}
+	cfg := config.WatcherConfig{AllowedLanguages: []string{"en"}}
+
+	if got := exclusionReason(show, cfg); got != "language not allowed: ko" {
+		t.Fatalf("exclusionReason() = %q, want %q", got, "language not allowed: ko")
+	}
+
+	show.Language = "EN"
+	if got := exclusionReason(show, cfg); got != "" {
+		t.Fatalf("exclusionReason() = %q, want eligible English series", got)
+	}
+}
+
+func TestExclusionReasonRejectsUnknownGenresWhenFilterEnabled(t *testing.T) {
+	show := trakt.Show{Language: "en"}
+	cfg := config.WatcherConfig{ExcludedGenres: []string{"animation"}}
+
+	if got := exclusionReason(show, cfg); got != "genres unknown" {
+		t.Fatalf("exclusionReason() = %q, want %q", got, "genres unknown")
+	}
+	if got := exclusionReason(show, config.WatcherConfig{}); got != "" {
+		t.Fatalf("exclusionReason() with disabled filters = %q, want eligible series", got)
+	}
+}
+
+func TestExclusionReasonRejectsUnknownLanguageWhenFilterEnabled(t *testing.T) {
+	show := trakt.Show{Genres: []string{"drama"}}
+	cfg := config.WatcherConfig{AllowedLanguages: []string{"en"}}
+
+	if got := exclusionReason(show, cfg); got != "language unknown" {
+		t.Fatalf("exclusionReason() = %q, want %q", got, "language unknown")
+	}
+}
+
+func TestProcessShowSkipsExcludedSeriesBeforeAPIRequests(t *testing.T) {
+	service := &Service{}
+	item := calendarItem{show: trakt.Show{Genres: []string{"animation"}, Language: "en"}}
+	cfg := config.WatcherConfig{ExcludedGenres: []string{"animation"}}
+
+	result := service.processShow(context.Background(), item, false, cfg)
+
+	if result.Action != "skipped" || result.Reason != "excluded genre: animation" {
+		t.Fatalf("processShow() = action %q, reason %q", result.Action, result.Reason)
+	}
+}
 
 func TestShouldRequestSeasonSkipsWhenPreviousSeasonStillAiring(t *testing.T) {
 	progress := &trakt.ShowProgress{
