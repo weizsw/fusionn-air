@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strconv"
-	"time"
 
 	"github.com/fusionn-air/internal/client/emby"
 	"github.com/fusionn-air/internal/client/trakt"
@@ -12,16 +11,15 @@ import (
 	"github.com/fusionn-air/pkg/logger"
 )
 
-func (s *Service) processEmbySeriesItems(ctx context.Context, result *ProcessingResult, cfg *config.Config, dryRun bool, sonarrTvdbIDs map[int]bool, series []emby.Item) {
+func (s *Service) processEmbySeriesItems(ctx context.Context, result *ProcessingResult, cfg *config.Config, dryRun bool, sonarrTvdbIDs map[int]bool, series []emby.Item) error {
 	if s.emby == nil {
-		return
+		return nil
 	}
 
 	queue := s.queues[MediaTypeEmbySeries]
 
-	if len(series) == 0 {
-		logger.Info("📺 No series found in non-excluded libraries")
-		return
+	if sonarrTvdbIDs == nil || len(series) == 0 {
+		return s.processEmbySeriesRemovalQueue(ctx, result, queue, cfg, dryRun)
 	}
 
 	logger.Infof("📺 Total series fetched: %d", len(series))
@@ -44,14 +42,14 @@ func (s *Service) processEmbySeriesItems(ctx context.Context, result *Processing
 	logger.Infof("📺 Found %d orphan series in Emby (not in Sonarr)", len(orphans))
 
 	if len(orphans) == 0 {
-		return
+		return s.processEmbySeriesRemovalQueue(ctx, result, queue, cfg, dryRun)
 	}
 
 	logger.Info("👁️  Fetching TV watch history from Trakt...")
 	watchedShows, err := s.trakt.GetWatchedShows(ctx)
 	if err != nil {
 		logger.Errorf("❌ Failed to get watched shows: %v", err)
-		return
+		return s.processEmbySeriesRemovalQueue(ctx, result, queue, cfg, dryRun)
 	}
 
 	watchedByTvdb := make(map[int]*trakt.WatchedShow)
@@ -62,98 +60,56 @@ func (s *Service) processEmbySeriesItems(ctx context.Context, result *Processing
 	}
 
 	for _, item := range orphans {
-		res := s.processOneEmbySeries(ctx, item, watchedByTvdb, queue, cfg)
+		res, err := s.processOneEmbySeries(ctx, item, watchedByTvdb, queue, cfg, dryRun)
 		if res.ID != 0 {
 			result.AddResult(res)
 		}
+		if err != nil {
+			return fmt.Errorf("process Emby series %q: %w", item.Name, err)
+		}
 	}
 
-	s.processEmbySeriesRemovalQueue(ctx, result, queue, cfg, dryRun)
+	return s.processEmbySeriesRemovalQueue(ctx, result, queue, cfg, dryRun)
 }
 
-func (s *Service) processOneEmbySeries(ctx context.Context, item emby.Item, watchedByTvdb map[int]*trakt.WatchedShow, queue *Queue, cfg *config.Config) MediaResult {
-	embyID, err := strconv.Atoi(item.ID)
-	if err != nil || embyID == 0 {
+func (s *Service) processOneEmbySeries(ctx context.Context, item emby.Item, watchedByTvdb map[int]*trakt.WatchedShow, queue *Queue, cfg *config.Config, dryRun bool) (MediaResult, error) {
+	embyID, _ := strconv.Atoi(item.ID)
+	if embyID == 0 {
 		logger.Warnf("Skipping Emby series %q (invalid ID: %s)", item.Name, item.ID)
-		return MediaResult{}
+		return MediaResult{}, nil
 	}
 	tvdbID := emby.ParseProviderID(item.ProviderIDs, "Tvdb")
-
-	res := MediaResult{
-		Type:  MediaTypeEmbySeries,
-		Title: item.Name,
-		ID:    embyID,
-	}
-
+	res := MediaResult{Type: MediaTypeEmbySeries, Title: item.Name, ID: embyID}
 	if isExcluded(item.Name, cfg.Cleanup.Exclusions) {
-		res.Action = "skipped"
-		res.Reason = "in exclusion list"
-		return res
+		res.Action, res.Reason = "skipped", "in exclusion list"
+		return res, nil
 	}
-
-	if queue.IsQueued(embyID) {
-		if queue.IsReadyForRemoval(embyID, cfg.Cleanup.DelayDays) {
-			return MediaResult{}
-		}
-		queueItem := queue.Get(embyID)
-		daysInQueue := int(time.Since(queueItem.MarkedAt).Hours() / 24)
-		daysUntil := cfg.Cleanup.DelayDays - daysInQueue
-		if daysUntil < 0 {
-			daysUntil = 0
-		}
-		res.Action = "queued"
-		res.Reason = queueItem.Reason + " - queued for deletion"
-		res.DaysUntil = daysUntil
-		return res
+	if queued, found := existingCandidateResult(queue, embyID, cfg.Cleanup.DelayDays, res, " - queued for deletion"); found {
+		return queued, nil
 	}
-
 	watched, found := watchedByTvdb[tvdbID]
 	if !found {
-		res.Action = "skipped"
-		res.Reason = "no watch history"
-		return res
+		res.Action, res.Reason = "skipped", "no watch history"
+		return res, nil
 	}
-
 	progress, err := s.trakt.GetShowProgress(ctx, watched.Show.IDs.Trakt)
 	if err != nil {
-		res.Action = "error"
-		res.Reason = fmt.Sprintf("trakt error: %v", err)
-		return res
+		res.Action, res.Reason = "error", fmt.Sprintf("trakt error: %v", err)
+		return res, nil
 	}
-
 	seasons, _ := s.trakt.GetShowSeasons(ctx, watched.Show.IDs.Trakt)
-
 	watchedOnDisk, unwatchedSeasons := s.checkEmbyWatchedOnDisk(ctx, item.ID, progress)
 	if !watchedOnDisk {
-		res.Action = "skipped"
-		res.Reason = buildWatchingReason(progress, seasons, unwatchedSeasons)
-		return res
+		res.Action, res.Reason = "skipped", buildWatchingReason(progress, seasons, unwatchedSeasons)
+		return res, nil
+	}
+	if moreEpisodesComing, reason := checkEmbyMoreEpisodesComing(progress, seasons); moreEpisodesComing {
+		res.Action, res.Reason = "skipped", reason
+		return res, nil
 	}
 
-	moreEpisodesComing, ongoingReason := checkEmbyMoreEpisodesComing(progress, seasons)
-	if moreEpisodesComing {
-		if queue.IsQueued(embyID) {
-			queue.Remove(embyID)
-		}
-		res.Action = "skipped"
-		res.Reason = ongoingReason
-		return res
-	}
-
-	watchedReason := "fully watched (via Emby)"
-
-	queue.Add(&QueueItem{
-		ID:         embyID,
-		ExternalID: tvdbID,
-		Title:      item.Name,
-		MarkedAt:   time.Now(),
-		Reason:     watchedReason,
-	})
-
-	res.Action = "queued"
-	res.Reason = watchedReason + " - queued for deletion"
-	res.DaysUntil = cfg.Cleanup.DelayDays
-	return res
+	const watchedReason = "fully watched (via Emby)"
+	return scheduleCandidate(queue, &QueueItem{ID: embyID, ExternalID: tvdbID, Title: item.Name, Reason: watchedReason}, cfg.Cleanup.DelayDays, dryRun, res, " - queued for deletion")
 }
 
 func (s *Service) checkEmbyWatchedOnDisk(ctx context.Context, seriesID string, progress *trakt.ShowProgress) (bool, []int) {
@@ -230,48 +186,11 @@ func checkEmbyMoreEpisodesComing(progress *trakt.ShowProgress, seasons []trakt.S
 	return false, ""
 }
 
-func (s *Service) processEmbySeriesRemovalQueue(ctx context.Context, result *ProcessingResult, queue *Queue, cfg *config.Config, dryRun bool) {
-	ready := queue.GetReadyForRemoval(cfg.Cleanup.DelayDays)
-	if len(ready) == 0 {
-		return
-	}
-
-	logger.Infof("🗑️  %d Emby series ready for removal", len(ready))
-
-	for _, item := range ready {
-		embyID := strconv.Itoa(item.ID)
-
-		if dryRun {
-			logger.Warnf("🗑️  [DRY RUN] Would delete from Emby: %s", item.Title)
-			result.AddResult(MediaResult{
-				Type:   MediaTypeEmbySeries,
-				Title:  item.Title,
-				ID:     item.ID,
-				Action: "dry_run_remove",
-				Reason: "would be deleted",
-			})
-		} else {
-			if err := s.emby.DeleteItem(ctx, embyID); err != nil {
-				logger.Errorf("❌ Failed to delete %s from Emby: %v", item.Title, err)
-				result.AddResult(MediaResult{
-					Type:   MediaTypeEmbySeries,
-					Title:  item.Title,
-					ID:     item.ID,
-					Action: "error",
-					Reason: fmt.Sprintf("delete failed: %v", err),
-				})
-				continue
-			}
-			logger.Infof("✅ Deleted from Emby: %s", item.Title)
-			result.AddResult(MediaResult{
-				Type:   MediaTypeEmbySeries,
-				Title:  item.Title,
-				ID:     item.ID,
-				Action: "removed",
-				Reason: "deleted from Emby",
-			})
-		}
-
-		queue.Remove(item.ID)
-	}
+func (s *Service) processEmbySeriesRemovalQueue(ctx context.Context, result *ProcessingResult, queue *Queue, cfg *config.Config, dryRun bool) error {
+	return processReadyCandidates(ctx, result, queue, cfg.Cleanup.DelayDays, cfg.Cleanup.Exclusions, dryRun, removalPlan{
+		mediaType: MediaTypeEmbySeries, label: "Emby series", removedReason: "deleted from Emby",
+		remove: func(ctx context.Context, item *QueueItem) (bool, error) {
+			return true, s.emby.DeleteItem(ctx, strconv.Itoa(item.ID))
+		},
+	})
 }

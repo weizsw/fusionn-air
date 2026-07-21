@@ -166,8 +166,8 @@ cleanup:
   # Enable/disable the cleanup feature
   enabled: false
 
-  # Days to wait after fully watched before removing
-  # Gives you time to rewatch or change your mind
+  # Days to wait after unmonitoring before removing
+  # Emby items start this delay when queued because they have no monitor state
   delay_days: 3
 
   # Titles to NEVER remove (case-insensitive, works for both shows and movies)

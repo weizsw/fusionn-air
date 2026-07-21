@@ -2,11 +2,91 @@ package watcher
 
 import (
 	"context"
+	"errors"
 	"testing"
 
+	"github.com/fusionn-air/internal/client/overseerr"
 	"github.com/fusionn-air/internal/client/trakt"
 	"github.com/fusionn-air/internal/config"
+	"github.com/fusionn-air/pkg/logger"
 )
+
+type watcherConfigStub struct{ cfg config.Config }
+
+func (s *watcherConfigStub) Get() *config.Config { return &s.cfg }
+
+type watcherTraktStub struct {
+	calendar []trakt.CalendarShow
+	started  chan struct{}
+	block    chan struct{}
+}
+
+func (s *watcherTraktStub) GetMyShowsCalendar(context.Context, int) ([]trakt.CalendarShow, error) {
+	if s.started != nil {
+		close(s.started)
+	}
+	if s.block != nil {
+		<-s.block
+	}
+	return s.calendar, nil
+}
+func (s *watcherTraktStub) GetShowProgress(context.Context, int) (*trakt.ShowProgress, error) {
+	return &trakt.ShowProgress{Seasons: []trakt.SeasonProgress{{Number: 1, Aired: 10, Completed: 10}}}, nil
+}
+func (s *watcherTraktStub) GetShowSeasons(context.Context, int) ([]trakt.SeasonSummary, error) {
+	return []trakt.SeasonSummary{{Number: 1, EpisodeCount: 10, AiredEpisodes: 10}}, nil
+}
+
+type overseerrStub struct{ requestCalls int }
+
+func (s *overseerrStub) GetTVByTMDB(context.Context, int) (*overseerr.TVDetails, error) {
+	return &overseerr.TVDetails{}, nil
+}
+func (s *overseerrStub) GetSeasonRequestInfo(*overseerr.TVDetails, int) overseerr.SeasonRequestInfo {
+	return overseerr.SeasonRequestInfo{}
+}
+func (s *overseerrStub) RequestTV(context.Context, int, []int, *int) (*overseerr.RequestResponse, error) {
+	s.requestCalls++
+	return &overseerr.RequestResponse{}, nil
+}
+
+func TestProcessCalendarUsesPlatformSeams(t *testing.T) {
+	logger.Init(true)
+	traktClient := &watcherTraktStub{calendar: []trakt.CalendarShow{{
+		Show:    trakt.Show{Title: "Example", IDs: trakt.IDs{Trakt: 1, TMDB: 2}},
+		Episode: trakt.Episode{Season: 2, Number: 1},
+	}}}
+	overseerrClient := &overseerrStub{}
+	service := newService(traktClient, overseerrClient, nil, &watcherConfigStub{cfg: config.Config{Watcher: config.WatcherConfig{CalendarDays: 7}}})
+
+	results, err := service.ProcessCalendar(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if overseerrClient.requestCalls != 1 || len(results) != 1 || results[0].Action != "requested" {
+		t.Fatalf("requests = %d, results = %#v; want one requested season", overseerrClient.requestCalls, results)
+	}
+}
+
+func TestProcessCalendarRejectsOverlappingRun(t *testing.T) {
+	logger.Init(true)
+	traktClient := &watcherTraktStub{started: make(chan struct{}), block: make(chan struct{})}
+	service := newService(traktClient, &overseerrStub{}, nil, &watcherConfigStub{})
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := service.ProcessCalendar(context.Background())
+		firstDone <- err
+	}()
+	<-traktClient.started
+
+	if _, err := service.ProcessCalendar(context.Background()); !errors.Is(err, ErrAlreadyRunning) {
+		t.Fatalf("overlapping ProcessCalendar() error = %v, want ErrAlreadyRunning", err)
+	}
+	close(traktClient.block)
+	if err := <-firstDone; err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestExclusionReasonRejectsConfiguredGenre(t *testing.T) {
 	show := trakt.Show{Genres: []string{"Drama", "Animation"}, Language: "ja"}

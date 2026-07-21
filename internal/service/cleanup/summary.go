@@ -89,7 +89,11 @@ func printMediaSection(header string, results map[string][]MediaResult, dryRun b
 
 	// Queued items
 	if queued := results["queued"]; len(queued) > 0 {
-		logger.Infof("  QUEUED (%d):", len(queued))
+		if dryRun {
+			logger.Warnf("  WOULD QUEUE (%d):", len(queued))
+		} else {
+			logger.Infof("  QUEUED (%d):", len(queued))
+		}
 		for _, r := range queued {
 			title := formatTitle(r)
 			info := fmt.Sprintf("   • %-35s", title)

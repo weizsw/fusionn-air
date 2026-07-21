@@ -2,6 +2,9 @@ package cleanup
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -25,17 +28,58 @@ const (
 	MediaTypeEmbyMovie  MediaType = "emby_movie"
 )
 
-// Service handles cleanup of fully watched media
+var ErrAlreadyRunning = errors.New("cleanup is already running")
+
+type sonarrAdapter interface {
+	GetAllSeries(context.Context) ([]sonarr.Series, error)
+	GetSeries(context.Context, int) (*sonarr.Series, error)
+	DeleteSeries(context.Context, int, bool) error
+	UnmonitorSeries(context.Context, int) error
+}
+
+type radarrAdapter interface {
+	GetAllMovies(context.Context) ([]radarr.Movie, error)
+	GetMovie(context.Context, int) (*radarr.Movie, error)
+	DeleteMovie(context.Context, int, bool) error
+	UnmonitorMovie(context.Context, int) error
+}
+
+type embyAdapter interface {
+	GetLibraries(context.Context) ([]emby.VirtualFolder, error)
+	GetMovies(context.Context, string) ([]emby.Item, error)
+	GetSeries(context.Context, string) ([]emby.Item, error)
+	GetSeasons(context.Context, string) ([]emby.Item, error)
+	GetEpisodes(context.Context, string, string) ([]emby.Item, error)
+	DeleteItem(context.Context, string) error
+}
+
+type traktAdapter interface {
+	GetWatchedShows(context.Context) ([]trakt.WatchedShow, error)
+	GetWatchedMovies(context.Context) ([]trakt.WatchedMovie, error)
+	GetShowProgress(context.Context, int) (*trakt.ShowProgress, error)
+	GetShowSeasons(context.Context, int) ([]trakt.SeasonSummary, error)
+}
+
+type notificationAdapter interface {
+	IsEnabled() bool
+	Notify(context.Context, string, string, string) error
+}
+
+type configSource interface {
+	Get() *config.Config
+}
+
+// Service handles cleanup of fully watched media.
 type Service struct {
-	sonarr  *sonarr.Client
-	radarr  *radarr.Client
-	emby    *emby.Client
-	trakt   *trakt.Client
-	apprise *apprise.Client
+	sonarr  sonarrAdapter
+	radarr  radarrAdapter
+	emby    embyAdapter
+	trakt   traktAdapter
+	apprise notificationAdapter
+	cfgMgr  configSource
+	queues  map[MediaType]*Queue
 
-	cfgMgr *config.Manager
-	queues map[MediaType]*Queue
-
+	runMu       sync.Mutex
 	mu          sync.RWMutex
 	lastRun     time.Time
 	lastResults *ProcessingResult
@@ -73,7 +117,27 @@ type MediaStats struct {
 	Skipped        int `json:"skipped"`
 }
 
-func NewService(sonarrClient *sonarr.Client, radarrClient *radarr.Client, embyClient *emby.Client, traktClient *trakt.Client, appriseClient *apprise.Client, cfgMgr *config.Manager) *Service {
+func NewService(sonarrClient *sonarr.Client, radarrClient *radarr.Client, embyClient *emby.Client, traktClient *trakt.Client, appriseClient *apprise.Client, cfgMgr *config.Manager) (*Service, error) {
+	var sonarrDep sonarrAdapter
+	var radarrDep radarrAdapter
+	var embyDep embyAdapter
+	var appriseDep notificationAdapter
+	if sonarrClient != nil {
+		sonarrDep = sonarrClient
+	}
+	if radarrClient != nil {
+		radarrDep = radarrClient
+	}
+	if embyClient != nil {
+		embyDep = embyClient
+	}
+	if appriseClient != nil {
+		appriseDep = appriseClient
+	}
+	return newService(sonarrDep, radarrDep, embyDep, traktClient, appriseDep, cfgMgr, "data")
+}
+
+func newService(sonarrClient sonarrAdapter, radarrClient radarrAdapter, embyClient embyAdapter, traktClient traktAdapter, appriseClient notificationAdapter, cfgMgr configSource, queueDir string) (*Service, error) {
 	s := &Service{
 		sonarr:  sonarrClient,
 		radarr:  radarrClient,
@@ -84,16 +148,33 @@ func NewService(sonarrClient *sonarr.Client, radarrClient *radarr.Client, embyCl
 		queues:  make(map[MediaType]*Queue),
 	}
 
-	s.queues[MediaTypeSeries] = NewQueueWithFile("data/cleanup_series_queue.json")
-	s.queues[MediaTypeMovie] = NewQueueWithFile("data/cleanup_movie_queue.json")
-	s.queues[MediaTypeEmbySeries] = NewQueueWithFile("data/cleanup_emby_series_queue.json")
-	s.queues[MediaTypeEmbyMovie] = NewQueueWithFile("data/cleanup_emby_movie_queue.json")
-
-	return s
+	queues := []struct {
+		mediaType         MediaType
+		fileName          string
+		requiresUnmonitor bool
+	}{
+		{MediaTypeSeries, "cleanup_series_queue.json", true},
+		{MediaTypeMovie, "cleanup_movie_queue.json", true},
+		{MediaTypeEmbySeries, "cleanup_emby_series_queue.json", false},
+		{MediaTypeEmbyMovie, "cleanup_emby_movie_queue.json", false},
+	}
+	for _, definition := range queues {
+		queue, err := NewQueueWithFile(filepath.Join(queueDir, definition.fileName), definition.requiresUnmonitor)
+		if err != nil {
+			return nil, fmt.Errorf("initialize %s queue: %w", definition.mediaType, err)
+		}
+		s.queues[definition.mediaType] = queue
+	}
+	return s, nil
 }
 
 // ProcessCleanup runs the cleanup logic for all media types
 func (s *Service) ProcessCleanup(ctx context.Context) (*ProcessingResult, error) {
+	if !s.runMu.TryLock() {
+		return nil, ErrAlreadyRunning
+	}
+	defer s.runMu.Unlock()
+
 	// Get fresh config for this run (supports hot-reload)
 	cfg := s.cfgMgr.Get()
 
@@ -114,12 +195,24 @@ func (s *Service) ProcessCleanup(ctx context.Context) (*ProcessingResult, error)
 		logger.Warn("⚠️  DRY RUN MODE - No actual deletions will be made")
 	}
 
-	result := &ProcessingResult{
-		Stats: make(map[MediaType]*MediaStats),
-	}
+	result := &ProcessingResult{Stats: make(map[MediaType]*MediaStats)}
+	defer func() {
+		s.mu.Lock()
+		s.lastRun = time.Now()
+		s.lastResults = result
+		s.mu.Unlock()
+		s.printSummary(result, startTime, dryRun)
+		s.sendNotification(ctx, result, dryRun)
+	}()
 
-	sonarrTvdbIDs := s.processSeries(ctx, result, cfg, dryRun)
-	radarrTmdbIDs := s.processMovies(ctx, result, cfg, dryRun)
+	sonarrTvdbIDs, err := s.processSeries(ctx, result, cfg, dryRun)
+	if err != nil {
+		return result, err
+	}
+	radarrTmdbIDs, err := s.processMovies(ctx, result, cfg, dryRun)
+	if err != nil {
+		return result, err
+	}
 
 	if s.emby != nil && cfg.Emby.Enabled {
 		libraries, excludedLibNames := s.resolveLibrariesAndExclusions(ctx, cfg)
@@ -129,7 +222,7 @@ func (s *Service) ProcessCleanup(ctx context.Context) (*ProcessingResult, error)
 		var allSeries []emby.Item
 
 		for _, lib := range libraries {
-			if excludedLibNames[lib.Name] {
+			if excludedLibNames[strings.ToLower(lib.Name)] {
 				logger.Infof("📚 Skipping excluded library %q (ID: %s)", lib.Name, lib.ItemID)
 				continue
 			}
@@ -170,29 +263,21 @@ func (s *Service) ProcessCleanup(ctx context.Context) (*ProcessingResult, error)
 			}
 		}
 
-		// Process aggregated items (fetches Trakt data once per type)
-		if len(allMovies) > 0 {
-			s.processEmbyMovieItems(ctx, result, cfg, dryRun, radarrTmdbIDs, allMovies)
-		} else if radarrTmdbIDs != nil {
+		// Process new orphans and drain durable queues independently of discovery.
+		if err := s.processEmbyMovieItems(ctx, result, cfg, dryRun, radarrTmdbIDs, allMovies); err != nil {
+			return result, err
+		}
+		if len(allMovies) == 0 && radarrTmdbIDs != nil {
 			logger.Info("🎬 No movies found in non-excluded movie libraries")
 		}
 
-		if len(allSeries) > 0 {
-			s.processEmbySeriesItems(ctx, result, cfg, dryRun, sonarrTvdbIDs, allSeries)
-		} else if sonarrTvdbIDs != nil {
+		if err := s.processEmbySeriesItems(ctx, result, cfg, dryRun, sonarrTvdbIDs, allSeries); err != nil {
+			return result, err
+		}
+		if len(allSeries) == 0 && sonarrTvdbIDs != nil {
 			logger.Info("📺 No series found in non-excluded TV libraries")
 		}
 	}
-
-	// Store results
-	s.mu.Lock()
-	s.lastRun = time.Now()
-	s.lastResults = result
-	s.mu.Unlock()
-
-	// Print summary and send notification
-	s.printSummary(result, startTime, dryRun)
-	s.sendNotification(ctx, result, dryRun)
 
 	return result, nil
 }
@@ -213,17 +298,17 @@ func (s *Service) resolveLibrariesAndExclusions(ctx context.Context, cfg *config
 	// Build map of excluded library names (case-insensitive)
 	excludedNames := make(map[string]bool, len(cfg.Emby.ExcludedLibraries))
 	for _, name := range cfg.Emby.ExcludedLibraries {
-		excludedNames[name] = true
+		excludedNames[strings.ToLower(name)] = true
 	}
 
 	// Validate that excluded names exist and log exclusions
 	libsByName := make(map[string]bool, len(libraries))
 	for _, lib := range libraries {
-		libsByName[lib.Name] = true
+		libsByName[strings.ToLower(lib.Name)] = true
 	}
 
 	for _, name := range cfg.Emby.ExcludedLibraries {
-		if !libsByName[name] {
+		if !libsByName[strings.ToLower(name)] {
 			logger.Warnf("⚠️  Excluded library %q not found in Emby — check spelling", name)
 		} else {
 			logger.Infof("🚫 Excluding Emby library %q from cleanup", name)
@@ -231,11 +316,6 @@ func (s *Service) resolveLibrariesAndExclusions(ctx context.Context, cfg *config
 	}
 
 	return libraries, excludedNames
-}
-
-// GetQueue returns the queue for a specific media type
-func (s *Service) GetQueue(mediaType MediaType) *Queue {
-	return s.queues[mediaType]
 }
 
 // GetAllQueues returns all queue items across all media types

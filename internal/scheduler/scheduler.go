@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"errors"
 	"sync"
 
 	"github.com/robfig/cron/v3"
@@ -94,7 +95,9 @@ func (s *Scheduler) runWatcher() {
 	}
 	ctx := context.Background()
 	_, err := s.watcher.ProcessCalendar(ctx)
-	if err != nil {
+	if errors.Is(err, watcher.ErrAlreadyRunning) {
+		logger.Info("Watcher run skipped: already running")
+	} else if err != nil {
 		logger.Errorf("❌ Watcher job failed: %v", err)
 	}
 }
@@ -105,7 +108,9 @@ func (s *Scheduler) runCleanup() {
 	}
 	ctx := context.Background()
 	_, err := s.cleanup.ProcessCleanup(ctx)
-	if err != nil {
+	if errors.Is(err, cleanup.ErrAlreadyRunning) {
+		logger.Info("Cleanup run skipped: already running")
+	} else if err != nil {
 		logger.Errorf("❌ Cleanup job failed: %v", err)
 	}
 }
