@@ -82,25 +82,6 @@ func (c *Client) GetTVByTMDB(ctx context.Context, tmdbID int) (*TVDetails, error
 	return &details, nil
 }
 
-// GetTVSeasonEpisodes returns the aired-order episode metadata for a season.
-func (c *Client) GetTVSeasonEpisodes(ctx context.Context, tmdbID, season int) ([]TVEpisode, error) {
-	var details struct {
-		Episodes []TVEpisode `json:"episodes"`
-	}
-	resp, err := c.client.R().SetContext(ctx).SetResult(&details).
-		Get(fmt.Sprintf("/tv/%d/season/%d", tmdbID, season))
-	if err != nil {
-		return nil, fmt.Errorf("getting TV season %d: %w", season, err)
-	}
-	if !resp.IsSuccess() {
-		return nil, fmt.Errorf("getting TV season %d: HTTP %d", season, resp.StatusCode())
-	}
-	if details.Episodes == nil {
-		return nil, fmt.Errorf("getting TV season %d: missing episodes", season)
-	}
-	return details.Episodes, nil
-}
-
 // RequestTV requests specific seasons of a TV show.
 // serverID is optional — when non-nil, it targets a specific Overseerr backend server.
 func (c *Client) RequestTV(ctx context.Context, tmdbID int, seasons []int, serverID *int) (*RequestResponse, error) {

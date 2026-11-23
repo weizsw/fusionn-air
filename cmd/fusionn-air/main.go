@@ -64,7 +64,7 @@ func run() int {
 				log.Error(ctx, "service_failed", "Invalid Scrob configuration", zap.String("stage", "scrob"), zap.Error(err))
 				return 1
 			}
-			source = watcher.NewScrobSource(client, overseerrClient)
+			source = watcher.NewScrobSource(client)
 		case "trakt", "":
 			client := trakt.NewClient(cfg.Trakt)
 			if err := client.Initialize(ctx); err != nil {

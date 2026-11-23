@@ -286,7 +286,7 @@ func (s *Service) processShow(ctx context.Context, item calendarItem, dryRun boo
 	shouldRequest, reason, err := item.eligible(ctx)
 	if err != nil {
 		result.Action = "error"
-		result.Error = fmt.Sprintf("failed to get progress: %v", err)
+		result.Error = fmt.Sprintf("failed to check season eligibility: %v", err)
 		return result
 	}
 	if !shouldRequest {

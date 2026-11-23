@@ -70,6 +70,37 @@ func (c *Client) GetCalendar(ctx context.Context, days int) (Calendar, error) {
 	return result.Calendar, nil
 }
 
+type Season struct {
+	ShowTMDBID   int    `json:"tmdb_id"`
+	Number       int    `json:"season_number"`
+	EpisodeOrder string `json:"episode_order"`
+	Episodes     []struct {
+		Season  int    `json:"canonical_season_number"`
+		Number  int    `json:"canonical_episode_number"`
+		AirDate string `json:"air_date"`
+	} `json:"episodes"`
+	Show struct {
+		Seasons []struct {
+			Number       int `json:"season_number"`
+			EpisodeCount int `json:"episode_count"`
+		} `json:"seasons_meta"`
+	} `json:"show"`
+}
+
+// GetSeason reads Scrob's season schedule and show metadata.
+func (c *Client) GetSeason(ctx context.Context, tmdbID, season int) (Season, error) {
+	var result Season
+	resp, err := c.http.R().SetContext(ctx).SetResult(&result).
+		Get(fmt.Sprintf("/shows/%d/season/%d", tmdbID, season))
+	if err != nil {
+		return Season{}, fmt.Errorf("scrob season %d: %w", season, err)
+	}
+	if !resp.IsSuccess() {
+		return Season{}, fmt.Errorf("scrob season %d: HTTP %d", season, resp.StatusCode())
+	}
+	return result, nil
+}
+
 type Episode struct {
 	ShowTMDBID  int  `json:"show_tmdb_id"`
 	Season      *int `json:"season_number"`

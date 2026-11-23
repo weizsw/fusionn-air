@@ -119,11 +119,6 @@ type TVSeason struct {
 	Name         string `json:"name"`
 }
 
-type TVEpisode struct {
-	Number  int    `json:"episodeNumber"`
-	AirDate string `json:"airDate"`
-}
-
 // RequestResponse after creating a request
 type RequestResponse struct {
 	ID        int    `json:"id"`

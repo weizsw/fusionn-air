@@ -28,9 +28,10 @@ If the dry-run results look right, set `scheduler.dry_run: false` to send reques
 
 ## Request rules
 
-- The watcher reads upcoming episodes from the selected calendar. Scrob includes shows with watch history or library entries. Scrob episodes need TMDB-compatible numbering for season requests.
-- Scrob checks every aired episode of the previous season. Specials alone can qualify a first season.
-- Trakt requires the previous season to have fully aired and been watched. It skips hidden seasons and first seasons with only specials watched.
+- The watcher reads upcoming episodes from the selected calendar. In Scrob mode, a show must have a completed episode in your watch history. Scrob episodes must use TMDB-compatible numbering.
+- The watcher requires every episode of the previous season to have aired. You must also have watched every episode.
+- In Scrob mode, the watcher reads the episode count and air dates from Scrob. It skips seasons with missing details or a season order other than TMDB aired order.
+- The watcher skips first seasons if you only watched specials. In Trakt mode, it also skips hidden seasons.
 - `watcher.excluded_genres` and `watcher.allowed_languages` filter both sources. If an enabled filter needs metadata that is missing, the watcher skips the series.
 - The watcher skips seasons that you already started, requested, or have available.
 - If you configure `watcher.routing`, the watcher uses genres and countries to pick a server. The Scrob path reads these fields from Seerr or Overseerr. Japanese animation also matches the `anime` rule.

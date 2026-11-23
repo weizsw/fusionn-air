@@ -5,17 +5,15 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/fusionn-air/internal/client/overseerr"
 	"github.com/fusionn-air/internal/client/scrob"
 )
 
 type scrobSource struct {
-	client    *scrob.Client
-	overseerr *overseerr.Client
+	client *scrob.Client
 }
 
-func NewScrobSource(client *scrob.Client, overseerrClient *overseerr.Client) Source {
-	return &scrobSource{client: client, overseerr: overseerrClient}
+func NewScrobSource(client *scrob.Client) Source {
+	return &scrobSource{client: client}
 }
 
 func (s *scrobSource) upcoming(ctx context.Context, days int) ([]calendarItem, error) {
@@ -59,49 +57,80 @@ func (s *scrobSource) upcoming(ctx context.Context, days int) ([]calendarItem, e
 		}
 		seasons[*episode.Season][episode.Number] = true
 	}
-	for i, item := range items {
-		items[i].eligible = func(ctx context.Context) (bool, string, error) {
-			return s.eligible(ctx, item, watched[item.tmdbID], today)
+	candidates := items[:0]
+	for _, item := range items {
+		showHistory := watched[item.tmdbID]
+		if len(showHistory) == 0 {
+			continue
 		}
+		tmdbID, season := item.tmdbID, item.season
+		item.eligible = func(ctx context.Context) (bool, string, error) {
+			return s.eligible(ctx, tmdbID, season, showHistory, today)
+		}
+		candidates = append(candidates, item)
 	}
-	return items, nil
+	return candidates, nil
 }
 
-func (s *scrobSource) eligible(ctx context.Context, item calendarItem, watched map[int]map[int]bool, today time.Time) (bool, string, error) {
-	if len(watched[item.season]) > 0 {
-		return false, fmt.Sprintf("already watched episodes in S%02d", item.season), nil
+func (s *scrobSource) eligible(ctx context.Context, tmdbID, season int, watched map[int]map[int]bool, today time.Time) (bool, string, error) {
+	if len(watched[season]) > 0 {
+		return false, fmt.Sprintf("already watched episodes in S%02d", season), nil
 	}
-	if item.season == 1 {
-		if len(watched[0]) > 0 {
-			return true, "watched specials only", nil
-		}
-		return false, "no watch history", nil
+	if season == 1 {
+		return false, "no S01 watch history", nil
 	}
-	previous := item.season - 1
-	if len(watched[previous]) == 0 {
+	previous := season - 1
+	previousWatched := watched[previous]
+	if len(previousWatched) == 0 {
 		return false, fmt.Sprintf("S%02d not watched", previous), nil
 	}
 
-	episodes, err := s.overseerr.GetTVSeasonEpisodes(ctx, item.tmdbID, previous)
+	details, err := s.client.GetSeason(ctx, tmdbID, previous)
 	if err != nil {
 		return false, "", err
 	}
+	// The season parameter can refer to a different grouping in other episode orders.
+	if details.EpisodeOrder != "tmdb:aired" || details.ShowTMDBID != tmdbID || details.Number != previous {
+		return false, fmt.Sprintf("S%02d TMDB aired-order metadata unavailable", previous), nil
+	}
+
+	total := 0
+	for _, summary := range details.Show.Seasons {
+		if summary.Number == previous {
+			total = summary.EpisodeCount
+			break
+		}
+	}
+	if total <= 0 {
+		return false, fmt.Sprintf("S%02d total episode count unknown", previous), nil
+	}
+	if len(details.Episodes) != total {
+		return false, fmt.Sprintf("S%02d episode list incomplete (%d/%d entries)", previous, len(details.Episodes), total), nil
+	}
+	seen := make(map[int]bool, total)
 	aired, completed := 0, 0
-	for _, episode := range episodes {
-		airDate, err := time.Parse(time.DateOnly, episode.AirDate)
-		if err != nil || airDate.After(today) || episode.Number < 1 {
+	for _, episode := range details.Episodes {
+		if episode.Season != previous || episode.Number < 1 || episode.Number > total || seen[episode.Number] {
+			return false, fmt.Sprintf("S%02d episode numbering inconsistent", previous), nil
+		}
+		seen[episode.Number] = true
+		airDate, _ := time.Parse(time.DateOnly, episode.AirDate)
+		if airDate.IsZero() {
+			return false, fmt.Sprintf("S%02dE%02d air date unknown", previous, episode.Number), nil
+		}
+		if airDate.After(today) {
 			continue
 		}
 		aired++
-		if watched[previous][episode.Number] {
+		if previousWatched[episode.Number] {
 			completed++
 		}
 	}
-	if aired == 0 {
-		return false, fmt.Sprintf("S%02d not aired", previous), nil
+	if aired < total {
+		return false, fmt.Sprintf("S%02d ongoing (%d/%d episodes aired)", previous, aired, total), nil
 	}
-	if completed < aired {
-		return false, fmt.Sprintf("S%02d incomplete (%d/%d aired episodes watched)", previous, completed, aired), nil
+	if completed < total {
+		return false, fmt.Sprintf("S%02d incomplete (%d/%d episodes watched)", previous, completed, total), nil
 	}
 	return true, fmt.Sprintf("S%02d complete", previous), nil
 }
