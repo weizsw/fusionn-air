@@ -3,20 +3,24 @@
 # ════════════════════════════════════════════════════════════════════════════
 # Copy this file to config.yaml and fill in your settings.
 #
-# Required setup:
-#   1. Create Trakt app at https://trakt.tv/oauth/applications
-#   2. Get Overseerr API key from Settings > General
-#   3. Get Sonarr API key from Settings > General (if using TV show cleanup)
-#   4. Get Radarr API key from Settings > General (if using movie cleanup)
-#   5. Copy this file: cp config.example.yaml config.yaml
-#   6. Edit config.yaml with your values
-#   7. Start the service
+# DEBUG, INFO, WARN or ERROR. An empty value uses LOG_LEVEL (default INFO).
+# Changes take effect when the configuration reloads.
+log_level: ""
 
 server:
   port: 8080
 
 # ─────────────────────────────────────────────────────────────────────────────
-# TRAKT (Required)
+# SCROB (when watcher.source is scrob)
+# ─────────────────────────────────────────────────────────────────────────────
+# Get the key from Scrob > Connections > API Key.
+# Use the Scrob frontend URL as seen by Fusionn-Air.
+scrob:
+  base_url: "http://localhost:7330"
+  api_key: ""
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TRAKT (when watcher.source is trakt)
 # ─────────────────────────────────────────────────────────────────────────────
 # 1. Go to: https://trakt.tv/oauth/applications
 # 2. Create new app with:
@@ -27,8 +31,8 @@ server:
 # On first run, you'll be prompted to authorize via browser.
 # Tokens are saved to data/trakt_tokens.json and auto-refreshed.
 trakt:
-  client_id: ""      # REQUIRED - from Trakt app settings
-  client_secret: ""  # REQUIRED - from Trakt app settings
+  client_id: ""
+  client_secret: ""
   base_url: "https://api.trakt.tv"
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -47,55 +51,8 @@ overseerr:
   user_id: 0                          # Optional - request as specific user
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SONARR (Required for TV show Cleanup)
+# SCHEDULER
 # ─────────────────────────────────────────────────────────────────────────────
-# Get API key from: Sonarr > Settings > General
-#
-# Only needed if cleanup.enabled is true and you want TV show cleanup.
-sonarr:
-  base_url: "http://sonarr:8989"  # Required for TV cleanup - adjust to your setup
-  api_key: ""                      # Required for TV cleanup - from Sonarr settings
-
-# ─────────────────────────────────────────────────────────────────────────────
-# RADARR (Required for Movie Cleanup)
-# ─────────────────────────────────────────────────────────────────────────────
-# Get API key from: Radarr > Settings > General
-#
-# Only needed if cleanup.enabled is true and you want movie cleanup.
-radarr:
-  base_url: "http://radarr:7878"  # Required for movie cleanup - adjust to your setup
-  api_key: ""                      # Required for movie cleanup - from Radarr settings
-
-# ─────────────────────────────────────────────────────────────────────────────
-# EMBY (Required for Emby Cleanup of MoviePilot content)
-# ─────────────────────────────────────────────────────────────────────────────
-# Emby is used to discover and clean up media added through MoviePilot
-# (or any other source not tracked by Sonarr/Radarr).
-#
-# The cleanup service compares Emby's library against Sonarr/Radarr to find
-# "orphan" items, then checks Trakt watch history and deletes fully watched
-# content directly from Emby (which removes the files from disk).
-#
-# Get API key from: Emby > Dashboard > API Keys > New
-emby:
-  enabled: false
-  base_url: "http://emby:8096"  # Emby server URL
-  api_key: ""                    # Emby API key
-
-  # Libraries to exclude from cleanup (case-insensitive, by display name)
-  # Items in these libraries are completely ignored — never treated as orphans.
-  # Useful for libraries managed outside Sonarr/Radarr (e.g., MoviePilot, manual).
-  excluded_libraries: []
-  # Example:
-  # excluded_libraries:
-  #   - "Anime"
-  #   - "Kids"
-  #   - "Music Videos"
-
-# ─────────────────────────────────────────────────────────────────────────────
-# SCHEDULER (Shared settings for both Watcher and Cleanup)
-# ─────────────────────────────────────────────────────────────────────────────
-# Both watcher and cleanup run on the same schedule and share these settings.
 scheduler:
   # Cron expression (standard 5-field format)
   # Examples:
@@ -104,8 +61,7 @@ scheduler:
   #   "0 */2 * * *"  = Every 2 hours
   cron: "0 */6 * * *"
 
-  # Dry run mode - logs what would happen without making changes
-  # RECOMMENDED: Start with true, check logs, then set to false
+  # Set to true to report requests without sending them.
   dry_run: true
 
   # Run immediately when service starts (before waiting for cron)
@@ -114,19 +70,17 @@ scheduler:
 # ─────────────────────────────────────────────────────────────────────────────
 # WATCHER - Auto-request new seasons via Overseerr
 # ─────────────────────────────────────────────────────────────────────────────
-# Monitors your Trakt calendar and requests new seasons when:
-#   - Previous season is 100% watched
-#   - Season isn't already requested/available in Overseerr
+# Requests a new season when you watched every aired episode of the previous season.
 watcher:
   # Enable/disable the watcher feature
   enabled: true
 
-  # How many days ahead to check for upcoming episodes
-  # Trakt API max is 33 days
+  source: scrob  # scrob or trakt
+
+  # Days ahead, including today. Maximum 90 for Scrob and 33 for Trakt.
   calendar_days: 14
 
-  # Skip animated and non-English series before making any request.
-  # Empty lists disable their filter. Missing metadata is skipped when enabled.
+  # Empty lists disable the corresponding filter. An enabled filter requires metadata.
   excluded_genres: ["animation", "anime", "donghua"]
   allowed_languages: ["en"]
 
@@ -150,35 +104,6 @@ watcher:
   #   alternate_server_id: 1
   #   alternate_genres: ["anime"]
   #   alternate_countries: ["jp", "kr", "cn"]
-
-# ─────────────────────────────────────────────────────────────────────────────
-# CLEANUP - Auto-remove fully watched content from Sonarr/Radarr
-# ─────────────────────────────────────────────────────────────────────────────
-# Removes TV shows from Sonarr and movies from Radarr (including files) when:
-#   - TV shows: All episodes ON DISK have been watched on Trakt
-#   - Movies: Movie has been watched on Trakt
-#   - Item has been in removal queue for delay_days
-#   - Title is not in exclusions list
-#
-# Note: Works with continuing series too - only checks episodes you have,
-# not future seasons.
-cleanup:
-  # Enable/disable the cleanup feature
-  enabled: false
-
-  # Days to wait after unmonitoring before removing
-  # Emby items start this delay when queued because they have no monitor state
-  delay_days: 3
-
-  # Titles to NEVER remove (case-insensitive, works for both shows and movies)
-  # Useful for content you want to keep permanently
-  exclusions: []
-  # Example:
-  # exclusions:
-  #   - "Breaking Bad"
-  #   - "The Office"
-  #   - "Inception"
-  #   - "The Dark Knight"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # APPRISE - Notifications (Optional)

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/signal"
@@ -10,139 +11,88 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 
 	"github.com/fusionn-air/internal/client/apprise"
-	"github.com/fusionn-air/internal/client/emby"
 	"github.com/fusionn-air/internal/client/overseerr"
-	"github.com/fusionn-air/internal/client/radarr"
-	"github.com/fusionn-air/internal/client/sonarr"
+	"github.com/fusionn-air/internal/client/scrob"
 	"github.com/fusionn-air/internal/client/trakt"
 	"github.com/fusionn-air/internal/config"
 	"github.com/fusionn-air/internal/handler"
 	"github.com/fusionn-air/internal/scheduler"
-	"github.com/fusionn-air/internal/service/cleanup"
 	"github.com/fusionn-air/internal/service/watcher"
 	"github.com/fusionn-air/internal/version"
 	"github.com/fusionn-air/pkg/logger"
 )
 
 func main() {
-	// Initialize logger
-	isDev := os.Getenv("ENV") != "production"
-	logger.Init(isDev)
+	os.Exit(run())
+}
+
+func run() int {
+	logger.Configure(logger.Config{})
 	defer logger.Sync()
+	log := logger.Component("main")
+	ctx := context.Background()
 
-	version.PrintBanner(nil)
-
-	// Load configuration
 	configPath := os.Getenv("CONFIG_PATH")
 	if configPath == "" {
 		configPath = "config/config.yaml"
 	}
-
-	logger.Infof("📁 Loading config: %s", configPath)
 	cfgMgr, err := config.NewManager(configPath)
 	if err != nil {
-		logger.Fatalf("❌ Config error: %v", err)
+		log.Error(ctx, "service_failed", "Could not load configuration", zap.String("stage", "config"), zap.String("path", configPath), zap.Error(err))
+		return 1
 	}
 	defer cfgMgr.Stop()
 	cfg := cfgMgr.Get()
+	version.PrintBanner(nil, logger.Log.Level().CapitalString())
 
-	if cfg.Scheduler.DryRun {
-		logger.Warn("⚠️  DRY RUN MODE - No actual requests/deletions will be made")
-	}
-
-	// Initialize Trakt client
-	logger.Info("🔗 Connecting to Trakt...")
-	traktClient := trakt.NewClient(cfg.Trakt)
-
-	ctx := context.Background()
-	if err := traktClient.Initialize(ctx); err != nil {
-		logger.Fatalf("❌ Trakt auth failed: %v", err)
-	}
-	logger.Info("✅  Trakt connected")
-
-	// Initialize Overseerr client
-	logger.Info("🔗 Connecting to Overseerr...")
 	overseerrClient := overseerr.NewClient(cfg.Overseerr)
-	logger.Info("✅  Overseerr configured")
-
-	// Initialize Apprise client (notifications)
 	var appriseClient *apprise.Client
 	if cfg.Apprise.Enabled {
 		appriseClient = apprise.NewClient(cfg.Apprise)
-		tag := cfg.Apprise.Tag
-		if tag == "" {
-			tag = "all"
-		}
-		logger.Infof("🔔 Notifications: enabled (key=%s, tag=%s)", cfg.Apprise.Key, tag)
-	} else {
-		logger.Info("🔔 Notifications: disabled")
 	}
 
-	// Initialize Sonarr and Radarr clients (if cleanup enabled)
-	var sonarrClient *sonarr.Client
-	var radarrClient *radarr.Client
-	var embyClient *emby.Client
-	var cleanupService *cleanup.Service
-
-	if cfg.Cleanup.Enabled {
-		if cfg.Sonarr.BaseURL != "" {
-			logger.Info("🔗 Connecting to Sonarr...")
-			sonarrClient = sonarr.NewClient(cfg.Sonarr)
-			logger.Info("✅  Sonarr configured")
-		}
-
-		if cfg.Radarr.BaseURL != "" {
-			logger.Info("🔗 Connecting to Radarr...")
-			radarrClient = radarr.NewClient(cfg.Radarr)
-			logger.Info("✅  Radarr configured")
-		}
-
-		if cfg.Emby.Enabled {
-			if cfg.Emby.BaseURL != "" && cfg.Emby.APIKey != "" {
-				logger.Info("🔗 Connecting to Emby...")
-				embyClient = emby.NewClient(cfg.Emby)
-				logger.Info("✅  Emby configured")
-			} else {
-				logger.Warn("⚠️  Emby enabled but base_url or api_key is empty — skipping")
-			}
-		}
-
-		cleanupService, err = cleanup.NewService(sonarrClient, radarrClient, embyClient, traktClient, appriseClient, cfgMgr)
-		if err != nil {
-			logger.Fatalf("❌ Cleanup state error: %v", err)
-		}
-		logger.Infof("🧹 Cleanup: enabled (delay=%d days)", cfg.Cleanup.DelayDays)
-	} else {
-		logger.Info("🧹 Cleanup: disabled")
-	}
-
-	// Initialize watcher service
 	var watcherService *watcher.Service
 	if cfg.Watcher.Enabled {
-		watcherService = watcher.NewService(traktClient, overseerrClient, appriseClient, cfgMgr)
-		logger.Infof("👁️  Watcher: enabled (calendar_days=%d)", cfg.Watcher.CalendarDays)
-	} else {
-		logger.Info("👁️  Watcher: disabled")
+		var source watcher.Source
+		switch cfg.Watcher.Source {
+		case "scrob":
+			client, err := scrob.NewClient(cfg.Scrob)
+			if err != nil {
+				log.Error(ctx, "service_failed", "Invalid Scrob configuration", zap.String("stage", "scrob"), zap.Error(err))
+				return 1
+			}
+			source = watcher.NewScrobSource(client, overseerrClient)
+		case "trakt", "":
+			client := trakt.NewClient(cfg.Trakt)
+			if err := client.Initialize(ctx); err != nil {
+				log.Error(ctx, "service_failed", "Trakt authorization failed", zap.String("stage", "trakt"), zap.Error(err))
+				return 1
+			}
+			source = watcher.NewTraktSource(client)
+		default:
+			log.Error(ctx, "service_failed", "Expected scrob or trakt in watcher.source", zap.String("stage", "config"), zap.String("source", cfg.Watcher.Source))
+			return 1
+		}
+		watcherService = watcher.NewService(source, overseerrClient, appriseClient, cfgMgr)
 	}
 
-	// Initialize scheduler
-	sched := scheduler.New(watcherService, cleanupService)
+	sched := scheduler.New(watcherService)
 	if err := sched.Start(cfg.Scheduler.Cron); err != nil {
-		logger.Fatalf("❌ Scheduler error: %v", err)
+		log.Error(ctx, "service_failed", "Could not start scheduler", zap.String("stage", "scheduler"), zap.Error(err))
+		return 1
 	}
+	defer sched.Stop()
 
-	// Initialize HTTP server
-	if !isDev {
+	if os.Getenv("ENV") == "production" {
 		gin.SetMode(gin.ReleaseMode)
 	}
-
+	gin.DefaultWriter = io.Discard
 	router := gin.New()
-	router.Use(gin.Recovery())
-	router.Use(requestLogger())
-
-	h := handler.New(watcherService, cleanupService, sched)
+	router.Use(requestLogger(), recoveryLogger())
+	h := handler.New(watcherService, sched)
 	h.RegisterRoutes(router)
 
 	srv := &http.Server{
@@ -153,58 +103,36 @@ func main() {
 		IdleTimeout:  60 * time.Second,
 	}
 
-	go func() {
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logger.Fatalf("❌ Server error: %v", err)
-		}
-	}()
+	quit, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- srv.ListenAndServe() }()
 
-	logger.Infof("🌐 API server: http://localhost:%d", cfg.Server.Port)
-	logger.Info("")
-	logger.Info("────────────────────────────────────────────────────────────────")
-	logger.Info("✅  Ready! Waiting for scheduled runs...")
-	logger.Info("────────────────────────────────────────────────────────────────")
+	log.Info(ctx, "service_started", "API server starting",
+		zap.String("version", version.Version), zap.Int("port", cfg.Server.Port),
+		zap.Bool("watcher_enabled", cfg.Watcher.Enabled), zap.String("source", cfg.Watcher.Source),
+		zap.Bool("dry_run", cfg.Scheduler.DryRun), zap.Bool("notifications_enabled", cfg.Apprise.Enabled))
 
-	// Run immediately on startup if configured
 	if cfg.Scheduler.RunOnStart {
-		logger.Info("")
-		logger.Info("🚀 Running initial jobs (run_on_start=true)...")
 		sched.RunNow()
 	}
 
-	// Wait for interrupt signal
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
+	select {
+	case err := <-serveErr:
+		log.Error(ctx, "service_failed", "HTTP server failed", zap.String("stage", "http"), zap.Error(err))
+		return 1
+	case <-quit.Done():
+	}
 
-	logger.Info("")
-	logger.Info("🛑 Shutting down...")
-
+	log.Info(ctx, "service_stopping", "Shutting down")
 	sched.Stop()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	shutdownCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-
-	if err := srv.Shutdown(ctx); err != nil {
-		logger.Errorf("❌ Shutdown error: %v", err)
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		log.Error(ctx, "service_failed", "HTTP server shutdown failed", zap.String("stage", "shutdown"), zap.Error(err))
+		return 1
 	}
-
-	logger.Info("👋 Goodbye!")
-}
-
-// requestLogger returns a gin middleware for logging HTTP requests
-func requestLogger() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		start := time.Now()
-		path := c.Request.URL.Path
-
-		c.Next()
-
-		// Only log non-health endpoints or errors
-		status := c.Writer.Status()
-		if path != "/api/v1/health" || status >= 400 {
-			latency := time.Since(start)
-			logger.Debugf("HTTP %s %s → %d (%v)", c.Request.Method, path, status, latency)
-		}
-	}
+	log.Info(ctx, "service_stopped", "Service stopped")
+	return 0
 }

@@ -103,6 +103,11 @@ type TVDetails struct {
 	NumberOfSeasons  int        `json:"numberOfSeasons"`
 	NumberOfEpisodes int        `json:"numberOfEpisodes"`
 	Seasons          []TVSeason `json:"seasons"`
+	Genres           []struct {
+		Name string `json:"name"`
+	} `json:"genres"`
+	OriginCountry    []string   `json:"originCountry"`
+	OriginalLanguage string     `json:"originalLanguage"`
 	MediaInfo        *MediaInfo `json:"mediaInfo,omitempty"`
 }
 
@@ -112,6 +117,11 @@ type TVSeason struct {
 	EpisodeCount int    `json:"episodeCount"`
 	AirDate      string `json:"airDate"`
 	Name         string `json:"name"`
+}
+
+type TVEpisode struct {
+	Number  int    `json:"episodeNumber"`
+	AirDate string `json:"airDate"`
 }
 
 // RequestResponse after creating a request

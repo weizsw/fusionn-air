@@ -7,10 +7,14 @@ import (
 	"time"
 
 	"github.com/go-resty/resty/v2"
+	"go.uber.org/zap"
 
+	httpclient "github.com/fusionn-air/internal/client"
 	"github.com/fusionn-air/internal/config"
 	"github.com/fusionn-air/pkg/logger"
 )
+
+var log = logger.Component("overseerr")
 
 type Client struct {
 	client *resty.Client
@@ -18,7 +22,7 @@ type Client struct {
 }
 
 func NewClient(cfg config.OverseerrConfig) *Client {
-	client := resty.New().
+	client := httpclient.NewHTTP().
 		SetBaseURL(cfg.BaseURL+"/api/v1").
 		SetTimeout(30*time.Second).
 		SetHeader("Content-Type", "application/json").
@@ -68,11 +72,33 @@ func (c *Client) GetTVByTMDB(ctx context.Context, tmdbID int) (*TVDetails, error
 		return nil, fmt.Errorf("getting TV details: %w", err)
 	}
 
-	if resp.IsError() {
-		return nil, fmt.Errorf("API error: status=%d", resp.StatusCode())
+	if !resp.IsSuccess() {
+		return nil, fmt.Errorf("getting TV details: HTTP %d", resp.StatusCode())
+	}
+	if details.ID != tmdbID {
+		return nil, fmt.Errorf("getting TV details: unexpected TMDB ID %d", details.ID)
 	}
 
 	return &details, nil
+}
+
+// GetTVSeasonEpisodes returns the aired-order episode metadata for a season.
+func (c *Client) GetTVSeasonEpisodes(ctx context.Context, tmdbID, season int) ([]TVEpisode, error) {
+	var details struct {
+		Episodes []TVEpisode `json:"episodes"`
+	}
+	resp, err := c.client.R().SetContext(ctx).SetResult(&details).
+		Get(fmt.Sprintf("/tv/%d/season/%d", tmdbID, season))
+	if err != nil {
+		return nil, fmt.Errorf("getting TV season %d: %w", season, err)
+	}
+	if !resp.IsSuccess() {
+		return nil, fmt.Errorf("getting TV season %d: HTTP %d", season, resp.StatusCode())
+	}
+	if details.Episodes == nil {
+		return nil, fmt.Errorf("getting TV season %d: missing episodes", season)
+	}
+	return details.Episodes, nil
 }
 
 // RequestTV requests specific seasons of a TV show.
@@ -98,14 +124,14 @@ func (c *Client) RequestTV(ctx context.Context, tmdbID int, seasons []int, serve
 	}
 
 	if resp.IsError() {
-		return nil, fmt.Errorf("API error: status=%d body=%s", resp.StatusCode(), resp.String())
+		return nil, fmt.Errorf("creating request: HTTP %d", resp.StatusCode())
 	}
 
+	fields := []zap.Field{zap.Int("tmdb_id", tmdbID), zap.Ints("seasons", seasons), zap.Int("overseerr_request_id", result.ID)}
 	if serverID != nil {
-		logger.Infof("📥 Requested TMDB=%d seasons=%v via Overseerr (serverId=%d)", tmdbID, seasons, *serverID)
-	} else {
-		logger.Infof("📥 Requested TMDB=%d seasons=%v via Overseerr", tmdbID, seasons)
+		fields = append(fields, zap.Int("server_id", *serverID))
 	}
+	log.Info(ctx, "request_submitted", "Season request submitted", fields...)
 	return &result, nil
 }
 

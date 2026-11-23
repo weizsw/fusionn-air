@@ -11,7 +11,9 @@ import (
 	"time"
 
 	"github.com/go-resty/resty/v2"
+	"go.uber.org/zap"
 
+	httpclient "github.com/fusionn-air/internal/client"
 	"github.com/fusionn-air/pkg/logger"
 )
 
@@ -62,7 +64,7 @@ type AuthManager struct {
 // NewAuthManager creates a new auth manager
 func NewAuthManager(clientID, clientSecret, baseURL string) *AuthManager {
 	return &AuthManager{
-		client: resty.New().
+		client: httpclient.NewHTTP().
 			SetTimeout(30*time.Second).
 			SetHeader("Content-Type", "application/json").
 			SetRetryCount(2).
@@ -79,9 +81,9 @@ func (a *AuthManager) Initialize(ctx context.Context) error {
 	if err := a.loadTokens(); err == nil {
 		// Check if refresh needed
 		if a.needsRefresh() {
-			logger.Debug("Refreshing Trakt token...")
+			log.Debug(ctx, "token_expiring", "Trakt token is due for refresh")
 			if err := a.refreshTokens(ctx); err != nil {
-				logger.Warnf("Token refresh failed, need re-auth: %v", err)
+				log.Warn(ctx, "token_refresh_failed", "Trakt authorization is required", zap.Error(err))
 				return a.startDeviceAuth(ctx)
 			}
 		}
@@ -180,20 +182,11 @@ func (a *AuthManager) startDeviceAuth(ctx context.Context) error {
 	}
 
 	if resp.IsError() {
-		return fmt.Errorf("device code error: %s", resp.String())
+		return fmt.Errorf("getting device code: HTTP %d", resp.StatusCode())
 	}
 
-	// Show user instructions
-	logger.Info("")
-	logger.Info("┌──────────────────────────────────────────────────────────────┐")
-	logger.Info("│               TRAKT AUTHORIZATION REQUIRED                   │")
-	logger.Info("├──────────────────────────────────────────────────────────────┤")
-	logger.Infof("│  1. Go to: %-50s│", deviceCode.VerificationURL)
-	logger.Infof("│  2. Enter code: %-45s│", deviceCode.UserCode)
-	logger.Info("│  3. Click 'Authorize' on the Trakt website                   │")
-	logger.Info("└──────────────────────────────────────────────────────────────┘")
-	logger.Info("")
-	logger.Info("⏳ Waiting for authorization...")
+	log.Warn(ctx, "authorization_required", "Open the Trakt verification URL and enter the user code",
+		zap.String("verification_url", deviceCode.VerificationURL), zap.String("user_code", deviceCode.UserCode))
 
 	// Poll for token
 	interval := time.Duration(deviceCode.Interval) * time.Second
@@ -283,7 +276,7 @@ func (a *AuthManager) refreshTokens(ctx context.Context) error {
 
 	if time.Now().Before(retryAfter) {
 		waitTime := time.Until(retryAfter)
-		logger.Debugf("Waiting %v for OAuth rate limit reset", waitTime.Round(time.Second))
+		log.Debug(ctx, "rate_limit_wait", "Waiting for Trakt OAuth rate limit reset", logger.DurMs(waitTime))
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -291,7 +284,7 @@ func (a *AuthManager) refreshTokens(ctx context.Context) error {
 		}
 	}
 
-	logger.Debug("Refreshing Trakt access token...")
+	log.Debug(ctx, "token_refresh_started", "Refreshing Trakt access token")
 
 	var token TokenResponse
 	resp, err := a.client.R().
@@ -315,7 +308,7 @@ func (a *AuthManager) refreshTokens(ctx context.Context) error {
 			a.mu.Lock()
 			a.retryAfter = time.Now().Add(time.Duration(seconds) * time.Second)
 			a.mu.Unlock()
-			logger.Warnf("OAuth rate limit: retry after %d seconds", seconds)
+			log.Warn(ctx, "rate_limited", "Trakt OAuth rate limit reached", zap.Int("retry_after_seconds", seconds))
 		}
 	}
 
@@ -330,7 +323,7 @@ func (a *AuthManager) refreshTokens(ctx context.Context) error {
 	}
 
 	if resp.IsError() {
-		return fmt.Errorf("refresh error: %s", resp.String())
+		return fmt.Errorf("refreshing token: HTTP %d", resp.StatusCode())
 	}
 
 	a.mu.Lock()
@@ -342,7 +335,7 @@ func (a *AuthManager) refreshTokens(ctx context.Context) error {
 	}
 	a.mu.Unlock()
 
-	logger.Debug("Trakt access token refreshed successfully")
+	log.Debug(ctx, "token_refresh_completed", "Trakt access token refreshed")
 	return a.saveTokens()
 }
 

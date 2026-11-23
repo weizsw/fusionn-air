@@ -2,11 +2,14 @@ package apprise
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/url"
 	"time"
 
 	"github.com/go-resty/resty/v2"
 
+	httpclient "github.com/fusionn-air/internal/client"
 	"github.com/fusionn-air/internal/config"
 )
 
@@ -34,7 +37,7 @@ func NewClient(cfg config.AppriseConfig) *Client {
 		tag = "all"
 	}
 
-	client := resty.New().
+	client := httpclient.NewHTTP().
 		SetBaseURL(cfg.BaseURL).
 		SetTimeout(30 * time.Second).
 		SetRetryCount(2).
@@ -74,16 +77,20 @@ func (c *Client) Notify(ctx context.Context, title, body, notifyType string) err
 		Post(fmt.Sprintf("/notify/%s", c.key))
 
 	if err != nil {
+		var urlErr *url.Error
+		if errors.As(err, &urlErr) {
+			err = urlErr.Err
+		}
 		return fmt.Errorf("sending request: %w", err)
 	}
 
 	if resp.IsError() {
-		return fmt.Errorf("apprise returned status %d: %s", resp.StatusCode(), resp.String())
+		return fmt.Errorf("apprise returned status %d", resp.StatusCode())
 	}
 
 	// Check for error in response body (Apprise returns 200 with error in JSON)
 	if apiResp.Error != "" {
-		return fmt.Errorf("apprise error: %s", apiResp.Error)
+		return fmt.Errorf("apprise rejected the notification")
 	}
 
 	return nil

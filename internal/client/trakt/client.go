@@ -8,11 +8,15 @@ import (
 	"time"
 
 	"github.com/go-resty/resty/v2"
+	"go.uber.org/zap"
 	"golang.org/x/time/rate"
 
+	httpclient "github.com/fusionn-air/internal/client"
 	"github.com/fusionn-air/internal/config"
 	"github.com/fusionn-air/pkg/logger"
 )
+
+var log = logger.Component("trakt")
 
 // Rate limits per Trakt API docs:
 // - POST/PUT/DELETE: 1 call per second
@@ -44,7 +48,7 @@ func NewClient(cfg config.TraktConfig) *Client {
 		getLimiter: rate.NewLimiter(rate.Limit(defaultGetRate), burstSize),
 	}
 
-	client := resty.New().
+	client := httpclient.NewHTTP().
 		SetBaseURL(cfg.BaseURL).
 		SetTimeout(30*time.Second).
 		SetHeader("Content-Type", "application/json").
@@ -71,6 +75,7 @@ func NewClient(cfg config.TraktConfig) *Client {
 
 // handleRateLimitHeaders processes rate limit info from response
 func (c *Client) handleRateLimitHeaders(resp *resty.Response) {
+	ctx := resp.Request.Context()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -78,14 +83,14 @@ func (c *Client) handleRateLimitHeaders(resp *resty.Response) {
 	if retryAfter := resp.Header().Get("Retry-After"); retryAfter != "" {
 		if seconds, err := strconv.Atoi(retryAfter); err == nil {
 			c.retryAfter = time.Now().Add(time.Duration(seconds) * time.Second)
-			logger.Warnf("Trakt rate limit: retry after %d seconds", seconds)
+			log.Warn(ctx, "rate_limited", "Trakt rate limit reached", zap.Int("retry_after_seconds", seconds))
 		}
 	}
 
 	// Log remaining requests if available
 	if remaining := resp.Header().Get("X-Ratelimit-Remaining"); remaining != "" {
 		if rem, err := strconv.Atoi(remaining); err == nil && rem < 50 {
-			logger.Debugf("Trakt rate limit: %d requests remaining", rem)
+			log.Debug(ctx, "rate_limit_remaining", "Trakt rate limit nearly reached", zap.Int("remaining", rem))
 		}
 	}
 }
@@ -100,7 +105,7 @@ func (c *Client) waitForRate(ctx context.Context, _ bool) error {
 	// Wait for retry-after period if we hit 429
 	if time.Now().Before(retryAfter) {
 		waitTime := time.Until(retryAfter)
-		logger.Debugf("Waiting %v for rate limit reset", waitTime.Round(time.Second))
+		log.Debug(ctx, "rate_limit_wait", "Waiting for Trakt rate limit reset", logger.DurMs(waitTime))
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -211,60 +216,6 @@ func (c *Client) GetShowProgress(ctx context.Context, showID int) (*ShowProgress
 	return &progress, nil
 }
 
-// GetWatchedShows returns all shows the user has watched with episode details
-func (c *Client) GetWatchedShows(ctx context.Context) ([]WatchedShow, error) {
-	if err := c.ensureAuth(ctx); err != nil {
-		return nil, fmt.Errorf("auth: %w", err)
-	}
-
-	if err := c.waitForRate(ctx, false); err != nil {
-		return nil, fmt.Errorf("rate limit: %w", err)
-	}
-
-	var shows []WatchedShow
-	resp, err := c.client.R().
-		SetContext(ctx).
-		SetResult(&shows).
-		Get("/users/me/watched/shows")
-
-	if err != nil {
-		return nil, fmt.Errorf("getting watched shows: %w", err)
-	}
-
-	if resp.IsError() {
-		return nil, fmt.Errorf("API error: status=%d", resp.StatusCode())
-	}
-
-	logger.Debugf("Fetched %d watched shows from Trakt", len(shows))
-	return shows, nil
-}
-
-// IsSeasonComplete checks if all aired episodes in a season have been watched
-func (c *Client) IsSeasonComplete(progress *ShowProgress, seasonNum int) bool {
-	for _, season := range progress.Seasons {
-		if season.Number == seasonNum {
-			return season.Aired > 0 && season.Completed == season.Aired
-		}
-	}
-	return false
-}
-
-// GetLastCompletedSeason returns the highest season number that's fully watched
-func (c *Client) GetLastCompletedSeason(progress *ShowProgress) int {
-	lastCompleted := 0
-	for _, season := range progress.Seasons {
-		if season.Number == 0 {
-			continue
-		}
-		if season.Aired > 0 && season.Completed == season.Aired {
-			if season.Number > lastCompleted {
-				lastCompleted = season.Number
-			}
-		}
-	}
-	return lastCompleted
-}
-
 // GetShowSeasons returns season summaries including total episode counts
 func (c *Client) GetShowSeasons(ctx context.Context, showID int) ([]SeasonSummary, error) {
 	if err := c.ensureAuth(ctx); err != nil {
@@ -292,32 +243,4 @@ func (c *Client) GetShowSeasons(ctx context.Context, showID int) ([]SeasonSummar
 	}
 
 	return seasons, nil
-}
-
-// GetWatchedMovies returns all movies the user has watched
-func (c *Client) GetWatchedMovies(ctx context.Context) ([]WatchedMovie, error) {
-	if err := c.ensureAuth(ctx); err != nil {
-		return nil, fmt.Errorf("auth: %w", err)
-	}
-
-	if err := c.waitForRate(ctx, false); err != nil {
-		return nil, fmt.Errorf("rate limit: %w", err)
-	}
-
-	var movies []WatchedMovie
-	resp, err := c.client.R().
-		SetContext(ctx).
-		SetResult(&movies).
-		Get("/users/me/watched/movies")
-
-	if err != nil {
-		return nil, fmt.Errorf("getting watched movies: %w", err)
-	}
-
-	if resp.IsError() {
-		return nil, fmt.Errorf("API error: status=%d", resp.StatusCode())
-	}
-
-	logger.Debugf("Fetched %d watched movies from Trakt", len(movies))
-	return movies, nil
 }

@@ -1,213 +1,53 @@
 # Fusionn-Air
 
-Automated media management service with three main features:
+Fusionn-Air requests upcoming TV seasons through Seerr or Overseerr. It uses your Scrob or Trakt calendar and watch history to decide when to request the next season. Apprise can send a summary after each run.
 
-1. **Auto-Request** - Monitors Trakt calendar and requests new seasons via Overseerr when you've completed watching previous seasons
-2. **Auto-Cleanup** - Removes fully watched TV shows (Sonarr) and movies (Radarr) after a configurable delay
-3. **Notifications** - Sends alerts via Apprise to Slack, Discord, Telegram, etc.
-
-## Features
-
-### 🎬 Auto-Request (Watcher)
-
-- Monitors your Trakt "My Shows" calendar for upcoming episodes
-- Checks watch progress - only requests when previous season is 100% complete
-- Prevents duplicate requests by checking Overseerr status (shows who already requested)
-- Supports requesting as a specific Overseerr user
-- Shows total vs aired episode counts for better visibility
-
-### 🧹 Auto-Cleanup
-
-**TV Shows (Sonarr):**
-- Identifies fully watched series via Trakt
-- Removes when all **on-disk episodes** are watched (works with continuing series too)
-- Skips series with more episodes coming (ongoing seasons)
-- Skips unmonitored series
-
-**Movies (Radarr):**
-- Identifies watched movies via Trakt
-- Removes movies marked as watched
-
-**Shared:**
-- Configurable delay (default 3 days) before removal
-- Exclusion list for titles you want to keep forever
-- Deletes files from disk when removing
-
-### 🔔 Notifications (Apprise)
-
-- Send notifications via [Apprise](https://github.com/caronc/apprise) to 80+ services
-- Slack, Discord, Telegram, Email, Pushover, and more
-- Notifies on new season requests and series removals
-- Slack-optimized formatting for readability
-
-## Quick Start
-
-### 1. Create Trakt App
-
-1. Go to <https://trakt.tv/oauth/applications>
-2. Create a new application:
-   - **Name**: `fusionn-air`
-   - **Redirect URI**: `urn:ietf:wg:oauth:2.0:oob`
-3. Copy your **Client ID** and **Client Secret**
-
-### 2. Configure
+## Quick start
 
 ```bash
 cp config/config.example.yaml config/config.yaml
 ```
 
-Edit `config/config.yaml`:
+For Scrob, set `watcher.source: scrob`. Set `scrob.base_url` to the Scrob web URL and `scrob.api_key` to the key from Scrob **Connections → API Key**. Fusionn-Air reads completed episodes from every source in that Scrob account.
 
-```yaml
-server:
-  port: 8080
+For Trakt, set `watcher.source: trakt` and enter your Trakt app client ID and secret. Follow the device authorization prompt on the first run. Configuration files without `watcher.source` use Trakt.
 
-trakt:
-  client_id: "your-client-id"
-  client_secret: "your-client-secret"
-  base_url: "https://api.trakt.tv"
+Set `overseerr.base_url` to the Seerr or Overseerr web URL and `overseerr.api_key` to its API key. If Fusionn-Air runs in Docker, use URLs that the container can reach. Use a shared network service name or a host address to reach services outside that container.
 
-overseerr:
-  base_url: "http://localhost:5055"
-  api_key: "your-api-key"
-  user_id: 0  # 0 = API key owner, or specific user ID
-
-sonarr:
-  base_url: "http://localhost:8989"
-  api_key: "your-api-key"
-
-radarr:
-  base_url: "http://localhost:7878"
-  api_key: "your-api-key"
-
-# Shared scheduler settings (applies to both watcher and cleanup)
-scheduler:
-  cron: "0 */6 * * *"  # Every 6 hours
-  dry_run: true        # Test first!
-  run_on_start: true
-
-# Watcher - auto-request new seasons
-watcher:
-  enabled: true
-  calendar_days: 14
-
-# Cleanup - auto-remove fully watched content
-cleanup:
-  enabled: false
-  delay_days: 3
-  exclusions: []  # e.g. ["Breaking Bad", "Inception"]
-
-# Notifications via Apprise (optional)
-apprise:
-  enabled: false
-  base_url: "http://apprise:8000"
-  key: "apprise"
-  tag: "fusionn-air"
-```
-
-### 3. Run
+Keep `scheduler.dry_run: true` while you check which seasons qualify. For a manual test, set `scheduler.run_on_start: false` and start Fusionn-Air.
 
 ```bash
 go run ./cmd/fusionn-air
 ```
 
-On first run, follow the Trakt authorization prompts.
-
-### 4. Test
-
 ```bash
-# Trigger watcher (new season requests)
 curl -X POST http://localhost:8080/api/v1/watcher/run
-
-# Trigger cleanup (remove watched series)
-curl -X POST http://localhost:8080/api/v1/cleanup/run
-
-# Check cleanup queue
-curl http://localhost:8080/api/v1/cleanup/queue
 ```
 
-### 5. Deploy
+If the dry-run results look right, set `scheduler.dry_run: false` to send requests. Docker Compose exposes the API on port `4554`.
 
-Once happy with dry-run results, set `scheduler.dry_run: false` and deploy:
+## Request rules
 
-```bash
-docker compose up -d
-```
+- The watcher reads upcoming episodes from the selected calendar. Scrob includes shows with watch history or library entries. Scrob episodes need TMDB-compatible numbering for season requests.
+- Scrob checks every aired episode of the previous season. Specials alone can qualify a first season.
+- Trakt requires the previous season to have fully aired and been watched. It skips hidden seasons and first seasons with only specials watched.
+- `watcher.excluded_genres` and `watcher.allowed_languages` filter both sources. If an enabled filter needs metadata that is missing, the watcher skips the series.
+- The watcher skips seasons that you already started, requested, or have available.
+- If you configure `watcher.routing`, the watcher uses genres and countries to pick a server. The Scrob path reads these fields from Seerr or Overseerr. Japanese animation also matches the `anime` rule.
 
-## API Endpoints
+## API endpoints
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/api/v1/health` | Health check |
 | GET | `/api/v1/watcher/stats` | Watcher statistics |
-| POST | `/api/v1/watcher/run` | Trigger watcher manually |
-| GET | `/api/v1/cleanup/stats` | Cleanup statistics |
-| GET | `/api/v1/cleanup/queue` | View removal queue |
-| POST | `/api/v1/cleanup/run` | Trigger cleanup manually |
+| POST | `/api/v1/watcher/run` | Run the watcher. Returns HTTP 409 if a run is already active. |
 
-## Configuration Reference
+## Configuration
 
-```yaml
-server:
-  port: 8080
+See [the example configuration](config/config.example.yaml) for all fields. Restart Fusionn-Air after you change the watch source or API credentials.
 
-trakt:
-  client_id: ""           # Required
-  client_secret: ""       # Required
-  base_url: "https://api.trakt.tv"
-
-overseerr:
-  base_url: ""            # Required
-  api_key: ""             # Required
-  user_id: 0              # Request as specific user (0 = API key owner)
-
-sonarr:
-  base_url: ""            # Required for TV show cleanup
-  api_key: ""             # Required for TV show cleanup
-
-radarr:
-  base_url: ""            # Required for movie cleanup
-  api_key: ""             # Required for movie cleanup
-
-scheduler:
-  cron: "0 */6 * * *"     # Cron schedule (applies to both watcher and cleanup)
-  dry_run: false          # Log only, no actual requests/deletions
-  run_on_start: true      # Run immediately on startup
-
-watcher:
-  enabled: true           # Enable watcher feature
-  calendar_days: 14       # Days ahead to check for upcoming episodes
-  excluded_genres: ["animation", "anime", "donghua"]
-  allowed_languages: ["en"] # Original languages; empty disables filtering
-
-cleanup:
-  enabled: false          # Enable cleanup feature
-  delay_days: 3           # Days after unmonitoring (or Emby queueing) before removal
-  exclusions: []          # Titles to never remove (works for both shows and movies)
-
-apprise:
-  enabled: false          # Enable notifications
-  base_url: ""            # Apprise API URL (e.g., http://apprise:8000)
-  key: "apprise"          # Apprise config key
-  tag: "fusionn-air"      # Tag to filter services
-```
-
-### Environment Variables
-
-Override any config with `FUSIONN_AIR_` prefix:
-
-```bash
-FUSIONN_AIR_TRAKT_CLIENT_ID=xxx
-FUSIONN_AIR_OVERSEERR_API_KEY=xxx
-FUSIONN_AIR_SONARR_API_KEY=xxx
-FUSIONN_AIR_RADARR_API_KEY=xxx
-FUSIONN_AIR_WATCHER_ENABLED=true
-FUSIONN_AIR_CLEANUP_ENABLED=true
-FUSIONN_AIR_APPRISE_ENABLED=true
-FUSIONN_AIR_APPRISE_BASE_URL=http://apprise:8000
-FUSIONN_AIR_APPRISE_KEY=apprise
-FUSIONN_AIR_APPRISE_TAG=fusionn-air
-```
+Use `FUSIONN_AIR_WATCHER_SOURCE`, `FUSIONN_AIR_SCROB_BASE_URL`, `FUSIONN_AIR_SCROB_API_KEY`, and `FUSIONN_AIR_OVERSEERR_API_KEY` to override these values in the process environment. For Trakt, use `FUSIONN_AIR_TRAKT_CLIENT_ID` and `FUSIONN_AIR_TRAKT_CLIENT_SECRET`.
 
 ## Notifications (Apprise)
 
@@ -274,70 +114,6 @@ docker run -d \
   fusionn-air
 ```
 
-## Logic Flows
-
-### Watcher (Auto-Request)
-
-```
-┌─────────────────┐
-│  Trakt Calendar │
-└────────┬────────┘
-         ▼
-┌─────────────────┐     No      ┌──────────┐
-│ Genre/language  ├────────────►│  Skip    │
-│ eligible?       │             └──────────┘
-└────────┬────────┘
-         │ Yes
-         ▼
-┌─────────────────┐     No      ┌──────────┐
-│ Previous season ├────────────►│  Skip    │
-│ complete?       │             └──────────┘
-└────────┬────────┘
-         │ Yes
-         ▼
-┌─────────────────┐     Yes     ┌──────────────────┐
-│ Already in      ├────────────►│ Skip (shows who  │
-│ Overseerr?      │             │ requested it)    │
-└────────┬────────┘             └──────────────────┘
-         │ No
-         ▼
-┌─────────────────┐
-│ Request season  │
-│ via Overseerr   │
-└─────────────────┘
-```
-
-### Cleanup (Auto-Remove)
-
-```
-┌─────────────────────────────────────┐
-│  Sonarr (TV) + Radarr (Movies)      │
-└────────────────┬────────────────────┘
-                 ▼
-┌─────────────────┐     Yes     ┌──────────┐
-│ In exclusion    ├────────────►│  Skip    │
-│ list?           │             └──────────┘
-└────────┬────────┘
-         │ No
-         ▼
-┌─────────────────┐     No      ┌──────────┐
-│ Fully watched   ├────────────►│  Skip    │
-│ on Trakt?       │             └──────────┘
-└────────┬────────┘
-         │ Yes
-         ▼
-┌─────────────────┐
-│ Add to removal  │
-│ queue           │
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐              Delete from
-│ After delay_days│────────────► Sonarr/Radarr
-│ in queue        │              (with files)
-└─────────────────┘
-```
-
 ## Tech Stack
 
 - **HTTP Framework**: Gin
@@ -351,7 +127,7 @@ docker run -d \
 This project includes CI/CD workflows:
 
 - **CI** (`ci.yml`) - Runs on push/PR: build, test, lint
-- **Release** (`release.yml`) - Runs on tag push (`v*`): builds and pushes Docker images to GHCR and Docker Hub
+- **Build** (`build.yml`) publishes Docker images to GHCR and Docker Hub on branch and version-tag pushes.
 
 ### Release a new version
 

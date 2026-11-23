@@ -65,27 +65,6 @@ type Season struct {
 	IDs    IDs `json:"ids"`
 }
 
-// WatchedShow from /users/me/watched/shows
-type WatchedShow struct {
-	Plays         int             `json:"plays"`
-	LastWatchedAt time.Time       `json:"last_watched_at"`
-	LastUpdatedAt time.Time       `json:"last_updated_at"`
-	ResetAt       *time.Time      `json:"reset_at"`
-	Show          Show            `json:"show"`
-	Seasons       []WatchedSeason `json:"seasons"`
-}
-
-type WatchedSeason struct {
-	Number   int              `json:"number"`
-	Episodes []WatchedEpisode `json:"episodes"`
-}
-
-type WatchedEpisode struct {
-	Number        int       `json:"number"`
-	Plays         int       `json:"plays"`
-	LastWatchedAt time.Time `json:"last_watched_at"`
-}
-
 // SeasonSummary from /shows/{id}/seasons
 type SeasonSummary struct {
 	Number        int    `json:"number"`
@@ -94,19 +73,4 @@ type SeasonSummary struct {
 	AiredEpisodes int    `json:"aired_episodes"` // Episodes that have aired
 	Title         string `json:"title"`
 	Overview      string `json:"overview"`
-}
-
-// Movie represents a movie from Trakt
-type Movie struct {
-	Title string `json:"title"`
-	Year  int    `json:"year"`
-	IDs   IDs    `json:"ids"`
-}
-
-// WatchedMovie from /users/me/watched/movies
-type WatchedMovie struct {
-	Plays         int       `json:"plays"`
-	LastWatchedAt time.Time `json:"last_watched_at"`
-	LastUpdatedAt time.Time `json:"last_updated_at"`
-	Movie         Movie     `json:"movie"`
 }

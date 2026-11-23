@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"reflect"
@@ -9,20 +10,21 @@ import (
 	"time"
 
 	"github.com/spf13/viper"
+	"go.uber.org/zap"
 
 	"github.com/fusionn-air/pkg/logger"
 )
 
+var log = logger.Component("config")
+
 type Config struct {
+	LogLevel  string          `mapstructure:"log_level"`
 	Server    ServerConfig    `mapstructure:"server"`
 	Trakt     TraktConfig     `mapstructure:"trakt"`
+	Scrob     ScrobConfig     `mapstructure:"scrob"`
 	Overseerr OverseerrConfig `mapstructure:"overseerr"`
-	Sonarr    SonarrConfig    `mapstructure:"sonarr"`
-	Radarr    RadarrConfig    `mapstructure:"radarr"`
-	Emby      EmbyConfig      `mapstructure:"emby"`
 	Scheduler SchedulerConfig `mapstructure:"scheduler"`
 	Watcher   WatcherConfig   `mapstructure:"watcher"`
-	Cleanup   CleanupConfig   `mapstructure:"cleanup"`
 	Apprise   AppriseConfig   `mapstructure:"apprise"`
 }
 
@@ -36,27 +38,15 @@ type TraktConfig struct {
 	BaseURL      string `mapstructure:"base_url"`
 }
 
+type ScrobConfig struct {
+	BaseURL string `mapstructure:"base_url"`
+	APIKey  string `mapstructure:"api_key"`
+}
+
 type OverseerrConfig struct {
 	BaseURL string `mapstructure:"base_url"`
 	APIKey  string `mapstructure:"api_key"`
-	UserID  int    `mapstructure:"user_id"`
-}
-
-type SonarrConfig struct {
-	BaseURL string `mapstructure:"base_url"`
-	APIKey  string `mapstructure:"api_key"`
-}
-
-type RadarrConfig struct {
-	BaseURL string `mapstructure:"base_url"`
-	APIKey  string `mapstructure:"api_key"`
-}
-
-type EmbyConfig struct {
-	Enabled           bool     `mapstructure:"enabled"`
-	BaseURL           string   `mapstructure:"base_url"`
-	APIKey            string   `mapstructure:"api_key"`
-	ExcludedLibraries []string `mapstructure:"excluded_libraries"`
+	UserID  int    `mapstructure:"user_id"` // Request as specific user (0 = API key owner)
 }
 
 type SchedulerConfig struct {
@@ -67,6 +57,7 @@ type SchedulerConfig struct {
 
 type WatcherConfig struct {
 	Enabled          bool          `mapstructure:"enabled"`
+	Source           string        `mapstructure:"source"`
 	CalendarDays     int           `mapstructure:"calendar_days"`
 	ExcludedGenres   []string      `mapstructure:"excluded_genres"`
 	AllowedLanguages []string      `mapstructure:"allowed_languages"`
@@ -80,17 +71,11 @@ type RoutingConfig struct {
 	AlternateCountries []string `mapstructure:"alternate_countries"`
 }
 
-type CleanupConfig struct {
-	Enabled    bool     `mapstructure:"enabled"`
-	DelayDays  int      `mapstructure:"delay_days"`
-	Exclusions []string `mapstructure:"exclusions"`
-}
-
 type AppriseConfig struct {
 	Enabled bool   `mapstructure:"enabled"`
-	BaseURL string `mapstructure:"base_url"`
-	Key     string `mapstructure:"key"`
-	Tag     string `mapstructure:"tag"`
+	BaseURL string `mapstructure:"base_url"` // Apprise API URL (e.g., http://apprise:8000)
+	Key     string `mapstructure:"key"`      // Apprise config key (default: apprise)
+	Tag     string `mapstructure:"tag"`      // Tag to filter services (default: all)
 }
 
 // Manager owns loading and immutable snapshots of hot-reloadable configuration.
@@ -109,7 +94,10 @@ type Manager struct {
 }
 
 func NewManager(path string) (*Manager, error) {
-	v := configuredViper(path)
+	v, err := configuredViper(path)
+	if err != nil {
+		return nil, err
+	}
 	cfg, err := load(v)
 	if err != nil {
 		return nil, err
@@ -120,8 +108,9 @@ func NewManager(path string) (*Manager, error) {
 		lastMod = stat.ModTime()
 	}
 	m := &Manager{cfg: cfg, viper: v, stop: make(chan struct{}), path: path, lastModTime: lastMod}
+	logger.SetConfigLevel(cfg.LogLevel)
+	log.Info(context.Background(), "config_loaded", "Configuration loaded", zap.String("path", path))
 	go m.pollForChanges(10 * time.Second)
-	logger.Info("📋 Config loaded (polling every 10s for changes)")
 	return m, nil
 }
 
@@ -155,9 +144,8 @@ func (m *Manager) pollForChanges(interval time.Duration) {
 				continue
 			}
 
-			logger.Info("🔄 Config file changed, reloading...")
 			if err := m.reload(); err != nil {
-				logger.Errorf("❌ Failed to reload config: %v", err)
+				log.Error(context.Background(), "config_reload_failed", "Could not reload configuration", zap.Error(err))
 				continue
 			}
 			m.mu.Lock()
@@ -180,19 +168,28 @@ func (m *Manager) reload() error {
 	preserveRestartOnly(oldCfg, newCfg)
 	m.cfg = newCfg
 	m.mu.Unlock()
+	logger.SetConfigLevel(newCfg.LogLevel)
 	logChanges(oldCfg, newCfg, "")
-	logger.Info("✅ Config reloaded (changes take effect on next run)")
+	log.Info(context.Background(), "config_reloaded", "Configuration reloaded")
 	return nil
 }
 
-func configuredViper(path string) *viper.Viper {
+func configuredViper(path string) (*viper.Viper, error) {
 	v := viper.New()
 	v.SetConfigFile(path)
 	v.SetConfigType("yaml")
 	v.SetEnvPrefix("FUSIONN_AIR")
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	v.AutomaticEnv()
-	return v
+	v.SetDefault("watcher.source", "trakt")
+	v.SetDefault("log_level", "")
+	v.SetDefault("trakt.base_url", "https://api.trakt.tv")
+	for _, key := range []string{"scrob.base_url", "scrob.api_key", "trakt.client_id", "trakt.client_secret", "overseerr.base_url", "overseerr.api_key"} {
+		if err := v.BindEnv(key); err != nil {
+			return nil, fmt.Errorf("bind %s: %w", key, err)
+		}
+	}
+	return v, nil
 }
 
 func load(v *viper.Viper) (*Config, error) {
@@ -209,17 +206,13 @@ func load(v *viper.Viper) (*Config, error) {
 func preserveRestartOnly(old, next *Config) {
 	next.Server = old.Server
 	next.Trakt = old.Trakt
+	next.Scrob = old.Scrob
 	next.Overseerr = old.Overseerr
-	next.Sonarr = old.Sonarr
-	next.Radarr = old.Radarr
 	next.Apprise = old.Apprise
-	next.Emby.Enabled = old.Emby.Enabled
-	next.Emby.BaseURL = old.Emby.BaseURL
-	next.Emby.APIKey = old.Emby.APIKey
 	next.Scheduler.Cron = old.Scheduler.Cron
 	next.Scheduler.RunOnStart = old.Scheduler.RunOnStart
 	next.Watcher.Enabled = old.Watcher.Enabled
-	next.Cleanup.Enabled = old.Cleanup.Enabled
+	next.Watcher.Source = old.Watcher.Source
 }
 
 func cloneConfig(cfg *Config) *Config {
@@ -227,12 +220,10 @@ func cloneConfig(cfg *Config) *Config {
 		return nil
 	}
 	cloned := *cfg
-	cloned.Emby.ExcludedLibraries = append([]string(nil), cfg.Emby.ExcludedLibraries...)
 	cloned.Watcher.ExcludedGenres = append([]string(nil), cfg.Watcher.ExcludedGenres...)
 	cloned.Watcher.AllowedLanguages = append([]string(nil), cfg.Watcher.AllowedLanguages...)
 	cloned.Watcher.Routing.AlternateGenres = append([]string(nil), cfg.Watcher.Routing.AlternateGenres...)
 	cloned.Watcher.Routing.AlternateCountries = append([]string(nil), cfg.Watcher.Routing.AlternateCountries...)
-	cloned.Cleanup.Exclusions = append([]string(nil), cfg.Cleanup.Exclusions...)
 	return &cloned
 }
 
@@ -263,15 +254,16 @@ func logChanges(old, cur any, prefix string) {
 			continue
 		}
 		if !reflect.DeepEqual(oldField.Interface(), newField.Interface()) {
-			logger.Infof("  📝 %s: %s → %s", fieldName, formatValue(oldField), formatValue(newField))
+			log.Debug(context.Background(), "config_field_changed", "Configuration field changed", zap.String("field", fieldName))
 		}
 	}
 }
 
-func formatValue(v reflect.Value) string {
-	return fmt.Sprintf("%v", v.Interface())
-}
-
+// Load reads a configuration file and environment overrides.
 func Load(path string) (*Config, error) {
-	return load(configuredViper(path))
+	v, err := configuredViper(path)
+	if err != nil {
+		return nil, err
+	}
+	return load(v)
 }

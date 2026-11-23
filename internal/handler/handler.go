@@ -7,20 +7,17 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/fusionn-air/internal/scheduler"
-	"github.com/fusionn-air/internal/service/cleanup"
 	"github.com/fusionn-air/internal/service/watcher"
 )
 
 type Handler struct {
 	watcher   *watcher.Service
-	cleanup   *cleanup.Service
 	scheduler *scheduler.Scheduler
 }
 
-func New(watcherService *watcher.Service, cleanupService *cleanup.Service, sched *scheduler.Scheduler) *Handler {
+func New(watcherService *watcher.Service, sched *scheduler.Scheduler) *Handler {
 	return &Handler{
 		watcher:   watcherService,
-		cleanup:   cleanupService,
 		scheduler: sched,
 	}
 }
@@ -36,11 +33,6 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 		api.GET("/watcher/stats", h.WatcherStats)
 		api.POST("/watcher/run", h.TriggerWatcher)
 
-		// Cleanup endpoints
-		api.GET("/cleanup/stats", h.CleanupStats)
-		api.GET("/cleanup/queue", h.CleanupQueue)
-		api.POST("/cleanup/run", h.TriggerCleanup)
-
 		// Legacy endpoints (for backwards compatibility)
 		api.GET("/stats", h.WatcherStats)
 		api.POST("/process", h.TriggerWatcher)
@@ -53,7 +45,6 @@ func (h *Handler) Health(c *gin.Context) {
 		"status":          "ok",
 		"scheduler":       h.scheduler.IsRunning(),
 		"watcher_enabled": h.watcher != nil,
-		"cleanup_enabled": h.cleanup != nil,
 	})
 }
 
@@ -89,6 +80,7 @@ func (h *Handler) TriggerWatcher(c *gin.Context) {
 		return
 	}
 	if err != nil {
+		_ = c.Error(err)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": err.Error(),
 		})
@@ -97,69 +89,6 @@ func (h *Handler) TriggerWatcher(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"message": "watcher processing complete",
-		"results": results,
-	})
-}
-
-// CleanupStats returns cleanup statistics
-func (h *Handler) CleanupStats(c *gin.Context) {
-	if h.cleanup == nil {
-		c.JSON(http.StatusOK, gin.H{
-			"enabled": false,
-			"message": "cleanup is disabled",
-		})
-		return
-	}
-
-	stats := h.cleanup.GetStats()
-	c.JSON(http.StatusOK, gin.H{
-		"enabled":  true,
-		"last_run": h.cleanup.GetLastRun(),
-		"stats":    stats,
-	})
-}
-
-// CleanupQueue returns the current cleanup queue
-func (h *Handler) CleanupQueue(c *gin.Context) {
-	if h.cleanup == nil {
-		c.JSON(http.StatusOK, gin.H{
-			"enabled": false,
-			"queue":   []interface{}{},
-		})
-		return
-	}
-
-	queue := h.cleanup.GetAllQueues()
-	c.JSON(http.StatusOK, gin.H{
-		"enabled": true,
-		"queue":   queue,
-	})
-}
-
-// TriggerCleanup manually triggers cleanup processing
-func (h *Handler) TriggerCleanup(c *gin.Context) {
-	if h.cleanup == nil {
-		c.JSON(http.StatusOK, gin.H{
-			"enabled": false,
-			"message": "cleanup is disabled",
-		})
-		return
-	}
-
-	results, err := h.cleanup.ProcessCleanup(c.Request.Context())
-	if errors.Is(err, cleanup.ErrAlreadyRunning) {
-		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
-		return
-	}
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": err.Error(),
-		})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"message": "cleanup processing complete",
 		"results": results,
 	})
 }

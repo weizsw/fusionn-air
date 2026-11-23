@@ -1,6 +1,6 @@
 # Fusionn Air
 
-Fusionn Air automates requesting and cleaning up media based on viewing activity.
+Fusionn-Air requests upcoming TV seasons based on viewing activity.
 
 ## Language
 
@@ -19,7 +19,3 @@ _Avoid_: Audio language, available language
 **Animated Series**:
 A series classified by Trakt under `animation`, `anime`, or `donghua`.
 _Avoid_: Cartoon, anime-only series
-
-**Removal Candidate**:
-Media durably scheduled for cleanup. It becomes eligible after its delay, which begins when unmonitoring succeeds for monitored media and when scheduling succeeds otherwise.
-_Avoid_: Queued item, cleanup item

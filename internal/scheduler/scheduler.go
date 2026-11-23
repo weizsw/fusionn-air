@@ -6,25 +6,25 @@ import (
 	"sync"
 
 	"github.com/robfig/cron/v3"
+	"go.uber.org/zap"
 
-	"github.com/fusionn-air/internal/service/cleanup"
 	"github.com/fusionn-air/internal/service/watcher"
 	"github.com/fusionn-air/pkg/logger"
 )
 
+var log = logger.Component("scheduler")
+
 type Scheduler struct {
 	cron    *cron.Cron
 	watcher *watcher.Service
-	cleanup *cleanup.Service
 	mu      sync.Mutex
 	running bool
 }
 
-func New(watcherService *watcher.Service, cleanupService *cleanup.Service) *Scheduler {
+func New(watcherService *watcher.Service) *Scheduler {
 	return &Scheduler{
 		cron:    cron.New(cron.WithSeconds()),
 		watcher: watcherService,
-		cleanup: cleanupService,
 	}
 }
 
@@ -40,9 +40,7 @@ func (s *Scheduler) Start(cronExpr string) error {
 	// Convert standard cron (5 fields) to cron with seconds (6 fields)
 	cronWithSeconds := "0 " + cronExpr
 
-	_, err := s.cron.AddFunc(cronWithSeconds, func() {
-		s.runJob()
-	})
+	_, err := s.cron.AddFunc(cronWithSeconds, s.runWatcher)
 	if err != nil {
 		return err
 	}
@@ -50,7 +48,7 @@ func (s *Scheduler) Start(cronExpr string) error {
 	s.cron.Start()
 	s.running = true
 
-	logger.Infof("⏰ Scheduler: %s", cronExpr)
+	log.Info(context.Background(), "scheduler_started", "Scheduler started", zap.String("cron", cronExpr))
 
 	return nil
 }
@@ -69,24 +67,9 @@ func (s *Scheduler) Stop() {
 	s.running = false
 }
 
-// RunNow triggers both watcher and cleanup immediately
+// RunNow triggers the watcher immediately.
 func (s *Scheduler) RunNow() {
-	go s.runJob()
-}
-
-// RunWatcherNow triggers only the watcher job
-func (s *Scheduler) RunWatcherNow() {
 	go s.runWatcher()
-}
-
-// RunCleanupNow triggers only the cleanup job
-func (s *Scheduler) RunCleanupNow() {
-	go s.runCleanup()
-}
-
-func (s *Scheduler) runJob() {
-	s.runWatcher()
-	s.runCleanup()
 }
 
 func (s *Scheduler) runWatcher() {
@@ -96,22 +79,9 @@ func (s *Scheduler) runWatcher() {
 	ctx := context.Background()
 	_, err := s.watcher.ProcessCalendar(ctx)
 	if errors.Is(err, watcher.ErrAlreadyRunning) {
-		logger.Info("Watcher run skipped: already running")
+		log.Info(ctx, "watcher_skipped", "Watcher run already active")
 	} else if err != nil {
-		logger.Errorf("❌ Watcher job failed: %v", err)
-	}
-}
-
-func (s *Scheduler) runCleanup() {
-	if s.cleanup == nil {
-		return
-	}
-	ctx := context.Background()
-	_, err := s.cleanup.ProcessCleanup(ctx)
-	if errors.Is(err, cleanup.ErrAlreadyRunning) {
-		logger.Info("Cleanup run skipped: already running")
-	} else if err != nil {
-		logger.Errorf("❌ Cleanup job failed: %v", err)
+		log.Error(ctx, "watcher_failed", "Scheduled watcher run failed", zap.Error(err))
 	}
 }
 

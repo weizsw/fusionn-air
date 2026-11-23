@@ -5,14 +5,12 @@ import (
 	"path/filepath"
 	"strconv"
 	"testing"
-
-	"github.com/fusionn-air/pkg/logger"
 )
 
-func writeConfig(t *testing.T, delay int) string {
+func writeConfig(t *testing.T, days int) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "config.yaml")
-	data := []byte("cleanup:\n  enabled: true\n  delay_days: " + strconv.Itoa(delay) + "\n  exclusions: [Keep]\n")
+	data := []byte("watcher:\n  source: scrob\n  calendar_days: " + strconv.Itoa(days) + "\n  excluded_genres: [animation]\n")
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -20,7 +18,6 @@ func writeConfig(t *testing.T, delay int) string {
 }
 
 func TestManagerGetReturnsIsolatedSnapshot(t *testing.T) {
-	logger.Init(true)
 	manager, err := NewManager(writeConfig(t, 3))
 	if err != nil {
 		t.Fatal(err)
@@ -28,18 +25,17 @@ func TestManagerGetReturnsIsolatedSnapshot(t *testing.T) {
 	defer manager.Stop()
 
 	snapshot := manager.Get()
-	snapshot.Cleanup.DelayDays = 99
-	snapshot.Cleanup.Exclusions[0] = "Changed"
+	snapshot.Watcher.CalendarDays = 99
+	snapshot.Watcher.ExcludedGenres[0] = "Changed"
 	fresh := manager.Get()
-	if fresh.Cleanup.DelayDays != 3 || fresh.Cleanup.Exclusions[0] != "Keep" {
-		t.Fatalf("Get() leaked mutable state: %#v", fresh.Cleanup)
+	if fresh.Watcher.CalendarDays != 3 || fresh.Watcher.ExcludedGenres[0] != "animation" {
+		t.Fatalf("Get() leaked mutable state: %#v", fresh.Watcher)
 	}
 }
 
 func TestReloadKeepsRestartOnlySettings(t *testing.T) {
-	logger.Init(true)
 	path := filepath.Join(t.TempDir(), "config.yaml")
-	if err := os.WriteFile(path, []byte("cleanup:\n  enabled: true\n  delay_days: 3\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("watcher:\n  enabled: true\n  source: scrob\n  calendar_days: 3\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	manager, err := NewManager(path)
@@ -47,41 +43,39 @@ func TestReloadKeepsRestartOnlySettings(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer manager.Stop()
-	if err := os.WriteFile(path, []byte("cleanup:\n  enabled: false\n  delay_days: 9\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("watcher:\n  enabled: false\n  source: trakt\n  calendar_days: 9\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
 	if err := manager.reload(); err != nil {
 		t.Fatal(err)
 	}
-	got := manager.Get().Cleanup
-	if !got.Enabled || got.DelayDays != 9 {
-		t.Fatalf("reloaded cleanup = %#v, want enabled preserved and delay 9", got)
+	got := manager.Get().Watcher
+	if !got.Enabled || got.Source != "scrob" || got.CalendarDays != 9 {
+		t.Fatalf("reloaded watcher = %#v, want enabled and source preserved with calendar days 9", got)
 	}
 }
 
 func TestInvalidReloadPreservesPreviousSnapshot(t *testing.T) {
-	logger.Init(true)
 	path := writeConfig(t, 3)
 	manager, err := NewManager(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer manager.Stop()
-	if err := os.WriteFile(path, []byte("cleanup: ["), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("watcher: ["), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
 	if err := manager.reload(); err == nil {
 		t.Fatal("reload() accepted invalid YAML")
 	}
-	if got := manager.Get().Cleanup.DelayDays; got != 3 {
-		t.Fatalf("invalid reload changed delay to %d, want 3", got)
+	if got := manager.Get().Watcher.CalendarDays; got != 3 {
+		t.Fatalf("invalid reload changed calendar days to %d, want 3", got)
 	}
 }
 
 func TestManagersDoNotShareViperState(t *testing.T) {
-	logger.Init(true)
 	first, err := NewManager(writeConfig(t, 3))
 	if err != nil {
 		t.Fatal(err)
@@ -93,8 +87,10 @@ func TestManagersDoNotShareViperState(t *testing.T) {
 	}
 	defer second.Stop()
 
-	first.reload()
-	if got := first.Get().Cleanup.DelayDays; got != 3 {
-		t.Fatalf("first manager reloaded delay %d from second manager, want 3", got)
+	if err := first.reload(); err != nil {
+		t.Fatal(err)
+	}
+	if got := first.Get().Watcher.CalendarDays; got != 3 {
+		t.Fatalf("first manager reloaded calendar days %d from second manager, want 3", got)
 	}
 }
