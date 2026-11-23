@@ -92,7 +92,7 @@ func run() int {
 	gin.DefaultWriter = io.Discard
 	router := gin.New()
 	router.Use(requestLogger(), recoveryLogger())
-	h := handler.New(watcherService, sched)
+	h := handler.New(watcherService, sched, cfg.Server.TriggerAPIKey)
 	h.RegisterRoutes(router)
 
 	srv := &http.Server{
@@ -114,7 +114,9 @@ func run() int {
 		zap.Bool("dry_run", cfg.Scheduler.DryRun), zap.Bool("notifications_enabled", cfg.Apprise.Enabled))
 
 	if cfg.Scheduler.RunOnStart {
-		sched.RunNow()
+		if err := sched.RunNow(ctx); err != nil {
+			log.Warn(ctx, "watcher_start_skipped", "Could not run watcher at startup", zap.Error(err))
+		}
 	}
 
 	select {

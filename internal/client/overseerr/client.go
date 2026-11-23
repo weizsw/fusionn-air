@@ -3,7 +3,8 @@ package overseerr
 import (
 	"context"
 	"fmt"
-	"net/url"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/go-resty/resty/v2"
@@ -23,7 +24,7 @@ type Client struct {
 
 func NewClient(cfg config.OverseerrConfig) *Client {
 	client := httpclient.NewHTTP().
-		SetBaseURL(cfg.BaseURL+"/api/v1").
+		SetBaseURL(strings.TrimRight(strings.TrimSpace(cfg.BaseURL), "/")+"/api/v1").
 		SetTimeout(30*time.Second).
 		SetHeader("Content-Type", "application/json").
 		SetHeader("X-Api-Key", cfg.APIKey).
@@ -40,31 +41,12 @@ func NewClient(cfg config.OverseerrConfig) *Client {
 	}
 }
 
-// SearchTV searches for a TV show by name
-func (c *Client) SearchTV(ctx context.Context, query string) (*SearchResult, error) {
-	var result SearchResult
-	resp, err := c.client.R().
-		SetContext(ctx).
-		SetQueryParam("query", url.QueryEscape(query)).
-		SetResult(&result).
-		Get("/search")
-
-	if err != nil {
-		return nil, fmt.Errorf("searching: %w", err)
-	}
-
-	if resp.IsError() {
-		return nil, fmt.Errorf("API error: status=%d", resp.StatusCode())
-	}
-
-	return &result, nil
-}
-
 // GetTVByTMDB gets TV show details by TMDB ID
 func (c *Client) GetTVByTMDB(ctx context.Context, tmdbID int) (*TVDetails, error) {
 	var details TVDetails
 	resp, err := c.client.R().
 		SetContext(ctx).
+		SetQueryParam("language", "en").
 		SetResult(&details).
 		Get(fmt.Sprintf("/tv/%d", tmdbID))
 
@@ -116,67 +98,91 @@ func (c *Client) RequestTV(ctx context.Context, tmdbID int, seasons []int, serve
 	return &result, nil
 }
 
-// SeasonRequestInfo contains details about a season's request status
+type SeasonRequestState int
+
+const (
+	SeasonRequestNone SeasonRequestState = iota
+	SeasonRequestActive
+	SeasonRequestAvailable
+	SeasonRequestFailed
+	SeasonRequestDeclined
+	SeasonRequestBlocklisted
+	SeasonRequestDeleted
+)
+
 type SeasonRequestInfo struct {
-	Requested   bool
-	Status      MediaStatus
-	RequestedBy string // Username of who requested it (empty if not requested or available)
+	State       SeasonRequestState
+	RequestID   int
+	RequestedBy string
 }
 
-// GetSeasonRequestInfo returns detailed info about a season's request status
+// GetSeasonRequestInfo describes the existing state for a normal-quality request.
 func (c *Client) GetSeasonRequestInfo(details *TVDetails, seasonNum int) SeasonRequestInfo {
-	info := SeasonRequestInfo{}
+	media := details.MediaInfo
+	if media == nil {
+		return SeasonRequestInfo{}
+	}
+	if media.Status == MediaStatusBlocklisted {
+		return SeasonRequestInfo{State: SeasonRequestBlocklisted}
+	}
+	seasonStatus := MediaStatusUnknown
+	for _, season := range media.Seasons {
+		if season.SeasonNumber == seasonNum {
+			seasonStatus = season.Status
+			break
+		}
+	}
+	switch seasonStatus {
+	case MediaStatusPartiallyAvail, MediaStatusAvailable:
+		return SeasonRequestInfo{State: SeasonRequestAvailable}
+	case MediaStatusBlocklisted:
+		return SeasonRequestInfo{State: SeasonRequestBlocklisted}
+	case MediaStatusDeleted:
+		return SeasonRequestInfo{State: SeasonRequestDeleted}
+	}
+	if media.Status == MediaStatusDeleted && seasonStatus == MediaStatusUnknown {
+		return SeasonRequestInfo{State: SeasonRequestDeleted}
+	}
 
-	if details.MediaInfo == nil {
+	var active, failed, declined *Request
+	for i := range media.Requests {
+		request := &media.Requests[i]
+		if request.Is4K || !slices.ContainsFunc(request.Seasons, func(season SeasonReq) bool { return season.SeasonNumber == seasonNum }) {
+			continue
+		}
+		switch request.Status {
+		case RequestStatusPending, RequestStatusApproved:
+			if active == nil || request.ID > active.ID {
+				active = request
+			}
+		case RequestStatusFailed:
+			if failed == nil || request.ID > failed.ID {
+				failed = request
+			}
+		case RequestStatusDeclined:
+			if declined == nil || request.ID > declined.ID {
+				declined = request
+			}
+		}
+	}
+	if active != nil {
+		info := SeasonRequestInfo{State: SeasonRequestActive, RequestID: active.ID}
+		if user := active.RequestedBy; user != nil {
+			info.RequestedBy = user.DisplayName
+			if info.RequestedBy == "" {
+				info.RequestedBy = user.Username
+			}
+		}
 		return info
 	}
-
-	// Check if season is in any existing request
-	for _, req := range details.MediaInfo.Requests {
-		for _, s := range req.Seasons {
-			if s.SeasonNumber == seasonNum {
-				info.Requested = true
-				if req.RequestedBy != nil {
-					if req.RequestedBy.DisplayName != "" {
-						info.RequestedBy = req.RequestedBy.DisplayName
-					} else {
-						info.RequestedBy = req.RequestedBy.Username
-					}
-				}
-				return info
-			}
-		}
+	if failed != nil {
+		return SeasonRequestInfo{State: SeasonRequestFailed, RequestID: failed.ID}
 	}
-
-	// Check season availability status
-	for _, s := range details.MediaInfo.Seasons {
-		if s.SeasonNumber == seasonNum {
-			info.Status = s.Status
-			if s.Status >= MediaStatusPending {
-				info.Requested = true
-			}
-		}
+	if declined != nil {
+		return SeasonRequestInfo{State: SeasonRequestDeclined, RequestID: declined.ID}
 	}
-
-	return info
-}
-
-// IsSeasonRequested checks if a season is already requested or available
-func (c *Client) IsSeasonRequested(details *TVDetails, seasonNum int) bool {
-	return c.GetSeasonRequestInfo(details, seasonNum).Requested
-}
-
-// GetSeasonStatus returns the current status of a specific season
-func (c *Client) GetSeasonStatus(details *TVDetails, seasonNum int) MediaStatus {
-	if details.MediaInfo == nil {
-		return MediaStatusUnknown
+	if seasonStatus == MediaStatusPending || seasonStatus == MediaStatusProcessing {
+		return SeasonRequestInfo{State: SeasonRequestActive}
 	}
-
-	for _, s := range details.MediaInfo.Seasons {
-		if s.SeasonNumber == seasonNum {
-			return s.Status
-		}
-	}
-
-	return MediaStatusUnknown
+	return SeasonRequestInfo{}
 }

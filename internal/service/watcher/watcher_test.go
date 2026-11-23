@@ -3,6 +3,7 @@ package watcher
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/fusionn-air/internal/client/overseerr"
@@ -15,9 +16,11 @@ type watcherConfigStub struct{ cfg config.Config }
 func (s *watcherConfigStub) Get() *config.Config { return &s.cfg }
 
 type watcherTraktStub struct {
-	calendar []trakt.CalendarShow
-	started  chan struct{}
-	block    chan struct{}
+	calendar    []trakt.CalendarShow
+	calendarErr error
+	seasonsErr  error
+	started     chan struct{}
+	block       chan struct{}
 }
 
 func (s *watcherTraktStub) GetMyShowsCalendar(context.Context, int) ([]trakt.CalendarShow, error) {
@@ -27,19 +30,22 @@ func (s *watcherTraktStub) GetMyShowsCalendar(context.Context, int) ([]trakt.Cal
 	if s.block != nil {
 		<-s.block
 	}
-	return s.calendar, nil
+	return s.calendar, s.calendarErr
 }
 func (s *watcherTraktStub) GetShowProgress(context.Context, int) (*trakt.ShowProgress, error) {
 	return &trakt.ShowProgress{Seasons: []trakt.SeasonProgress{{Number: 1, Aired: 10, Completed: 10}}}, nil
 }
 func (s *watcherTraktStub) GetShowSeasons(context.Context, int) ([]trakt.SeasonSummary, error) {
-	return []trakt.SeasonSummary{{Number: 1, EpisodeCount: 10, AiredEpisodes: 10}}, nil
+	return []trakt.SeasonSummary{{Number: 1, EpisodeCount: 10, AiredEpisodes: 10}}, s.seasonsErr
 }
 
-type overseerrStub struct{ requestCalls int }
+type overseerrStub struct {
+	requestCalls int
+	details      overseerr.TVDetails
+}
 
 func (s *overseerrStub) GetTVByTMDB(context.Context, int) (*overseerr.TVDetails, error) {
-	return &overseerr.TVDetails{}, nil
+	return &s.details, nil
 }
 func (s *overseerrStub) GetSeasonRequestInfo(*overseerr.TVDetails, int) overseerr.SeasonRequestInfo {
 	return overseerr.SeasonRequestInfo{}
@@ -138,15 +144,17 @@ func TestExclusionReasonRejectsUnknownLanguageWhenFilterEnabled(t *testing.T) {
 	}
 }
 
-func TestProcessShowSkipsExcludedSeriesBeforeAPIRequests(t *testing.T) {
-	service := &Service{}
-	item := calendarItem{genres: []string{"animation"}, language: "en"}
-	cfg := config.WatcherConfig{ExcludedGenres: []string{"animation"}}
-
-	result := service.processShow(context.Background(), item, false, cfg)
-
-	if result.Action != "skipped" || result.Reason != "excluded genre: animation" {
-		t.Fatalf("processShow() = action %q, reason %q", result.Action, result.Reason)
+func TestTraktCandidateUsesOverseerrMetadataBeforeProgress(t *testing.T) {
+	traktClient := &watcherTraktStub{calendar: []trakt.CalendarShow{{
+		Show:    trakt.Show{IDs: trakt.IDs{TMDB: 2}, Language: "en"},
+		Episode: trakt.Episode{Season: 2, Number: 1},
+	}}, seasonsErr: errors.New("must not get season counts")}
+	seerr := &overseerrStub{details: overseerr.TVDetails{OriginalLanguage: "ja"}}
+	cfg := &watcherConfigStub{cfg: config.Config{Watcher: config.WatcherConfig{AllowedLanguages: []string{"en"}}}}
+	service := newService(&traktSource{client: traktClient}, seerr, nil, cfg)
+	results, err := service.ProcessCalendar(context.Background())
+	if err != nil || len(results) != 1 || results[0].Action != "skipped" || results[0].Reason != "language not allowed: ja" {
+		t.Fatalf("results=%+v, err=%v", results, err)
 	}
 }
 
@@ -286,4 +294,45 @@ func TestShouldRequestSeasonSkipsWhenPreviousSeasonHidden(t *testing.T) {
 	if reason != wantReason {
 		t.Fatalf("shouldRequestSeason() reason = %q, want %q", reason, wantReason)
 	}
+}
+
+func TestProcessCalendarReportsFailedAndEmptyRuns(t *testing.T) {
+	upstream := &watcherTraktStub{calendar: []trakt.CalendarShow{{
+		Show:    trakt.Show{Title: "Example", IDs: trakt.IDs{Trakt: 1, TMDB: 2}},
+		Episode: trakt.Episode{Season: 2, Number: 1},
+	}}}
+	notifications := &notificationStub{}
+	service := newService(&traktSource{client: upstream}, &overseerrStub{}, notifications, &watcherConfigStub{})
+	ctx := context.Background()
+	upstream.seasonsErr = errors.New("season lookup failed")
+	results, err := service.ProcessCalendar(ctx)
+	if err != nil || len(results) != 1 || results[0].Action != "error" || !strings.Contains(notifications.body, "season lookup failed") {
+		t.Fatalf("season failure: results=%+v, err=%v, notification=%q", results, err, notifications.body)
+	}
+
+	upstream.calendarErr = errors.New("calendar unavailable")
+	if _, err := service.ProcessCalendar(ctx); !errors.Is(err, upstream.calendarErr) {
+		t.Fatalf("run error = %v", err)
+	}
+	if stats := service.GetStats(); stats.LastError == "" || stats.LastRun.IsZero() || len(stats.Results) != 0 || !strings.Contains(notifications.body, "calendar unavailable") {
+		t.Fatalf("failed run: stats=%+v, notification=%q", stats, notifications.body)
+	}
+
+	upstream.calendarErr = nil
+	upstream.calendar[0].Episode.Season = 0
+	if results, err := service.ProcessCalendar(ctx); err != nil || len(results) != 0 {
+		t.Fatalf("specials-only calendar: results=%+v, err=%v", results, err)
+	}
+	if stats := service.GetStats(); stats.LastError != "" || stats.LastRun.IsZero() || stats.TotalShows != 0 {
+		t.Fatalf("empty run: stats=%+v", stats)
+	}
+}
+
+type notificationStub struct{ body string }
+
+func (*notificationStub) IsEnabled() bool { return true }
+
+func (n *notificationStub) Notify(_ context.Context, _, body, _ string) error {
+	n.body = body
+	return nil
 }

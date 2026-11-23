@@ -9,6 +9,8 @@ log_level: ""
 
 server:
   port: 8080
+  # Set a separate secret to enable POST /api/v1/watcher/run.
+  trigger_api_key: ""
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SCROB (when watcher.source is scrob)
@@ -54,7 +56,7 @@ overseerr:
 # SCHEDULER
 # ─────────────────────────────────────────────────────────────────────────────
 scheduler:
-  # Cron expression (standard 5-field format)
+  # Cron expression (five fields or a descriptor such as @daily)
   # Examples:
   #   "0 */6 * * *"  = Every 6 hours
   #   "0 0 * * *"    = Daily at midnight
@@ -70,7 +72,7 @@ scheduler:
 # ─────────────────────────────────────────────────────────────────────────────
 # WATCHER - Auto-request new seasons via Overseerr
 # ─────────────────────────────────────────────────────────────────────────────
-# Requests a new season when you watched every aired episode of the previous season.
+# Requests a new season when the previous season is fully aired and watched.
 watcher:
   # Enable/disable the watcher feature
   enabled: true
@@ -95,7 +97,7 @@ watcher:
   # If routing is not configured, requests use Overseerr's default server.
   routing:
     default_server_id: 0          # Server ID for regular TV shows (e.g. Sonarr)
-    alternate_server_id: 1        # Server ID for matched content (e.g. MoviePilot)
+    alternate_server_id: 1        # Required when an alternate routing rule is set
     alternate_genres: []           # Genres that route to alternate server
     alternate_countries: []        # Country codes that route to alternate server
   # Example:

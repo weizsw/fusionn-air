@@ -3,6 +3,7 @@ package config
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"reflect"
 	"strings"
@@ -29,7 +30,8 @@ type Config struct {
 }
 
 type ServerConfig struct {
-	Port int `mapstructure:"port"`
+	Port          int    `mapstructure:"port"`
+	TriggerAPIKey string `mapstructure:"trigger_api_key"`
 }
 
 type TraktConfig struct {
@@ -103,6 +105,10 @@ func NewManager(path string) (*Manager, error) {
 		return nil, err
 	}
 
+	if err := validate(cfg, v.IsSet("watcher.routing.alternate_server_id")); err != nil {
+		return nil, err
+	}
+
 	var lastMod time.Time
 	if stat, err := os.Stat(path); err == nil {
 		lastMod = stat.ModTime()
@@ -140,13 +146,12 @@ func (m *Manager) pollForChanges(interval time.Duration) {
 			m.mu.RLock()
 			lastMod := m.lastModTime
 			m.mu.RUnlock()
-			if !stat.ModTime().After(lastMod) {
+			if stat.ModTime().Equal(lastMod) {
 				continue
 			}
 
 			if err := m.reload(); err != nil {
 				log.Error(context.Background(), "config_reload_failed", "Could not reload configuration", zap.Error(err))
-				continue
 			}
 			m.mu.Lock()
 			m.lastModTime = stat.ModTime()
@@ -166,6 +171,10 @@ func (m *Manager) reload() error {
 	m.mu.Lock()
 	oldCfg := m.cfg
 	preserveRestartOnly(oldCfg, newCfg)
+	if err := validate(newCfg, m.viper.IsSet("watcher.routing.alternate_server_id")); err != nil {
+		m.mu.Unlock()
+		return err
+	}
 	m.cfg = newCfg
 	m.mu.Unlock()
 	logger.SetConfigLevel(newCfg.LogLevel)
@@ -181,10 +190,11 @@ func configuredViper(path string) (*viper.Viper, error) {
 	v.SetEnvPrefix("FUSIONN_AIR")
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	v.AutomaticEnv()
+	v.SetDefault("server.port", 8080)
 	v.SetDefault("watcher.source", "trakt")
 	v.SetDefault("log_level", "")
 	v.SetDefault("trakt.base_url", "https://api.trakt.tv")
-	for _, key := range []string{"scrob.base_url", "scrob.api_key", "trakt.client_id", "trakt.client_secret", "overseerr.base_url", "overseerr.api_key"} {
+	for _, key := range []string{"server.trigger_api_key", "scrob.base_url", "scrob.api_key", "trakt.client_id", "trakt.client_secret", "overseerr.base_url", "overseerr.api_key"} {
 		if err := v.BindEnv(key); err != nil {
 			return nil, fmt.Errorf("bind %s: %w", key, err)
 		}
@@ -201,6 +211,30 @@ func load(v *viper.Viper) (*Config, error) {
 		return nil, err
 	}
 	return &cfg, nil
+}
+
+func validate(cfg *Config, alternateServerSet bool) error {
+	if cfg.Server.Port < 1 || cfg.Server.Port > 65535 {
+		return fmt.Errorf("server.port must be between 1 and 65535")
+	}
+	if !cfg.Watcher.Enabled {
+		return nil
+	}
+	baseURL, err := url.Parse(strings.TrimSpace(cfg.Overseerr.BaseURL))
+	if err != nil || (baseURL.Scheme != "http" && baseURL.Scheme != "https") || baseURL.Hostname() == "" || baseURL.User != nil || baseURL.RawQuery != "" || baseURL.Fragment != "" {
+		return fmt.Errorf("overseerr.base_url must be an HTTP or HTTPS service URL")
+	}
+	if strings.TrimSpace(cfg.Overseerr.APIKey) == "" {
+		return fmt.Errorf("overseerr.api_key is required when the watcher is enabled")
+	}
+	routing := cfg.Watcher.Routing
+	if (len(routing.AlternateGenres) > 0 || len(routing.AlternateCountries) > 0) && !alternateServerSet {
+		return fmt.Errorf("watcher.routing.alternate_server_id is required for alternate routing")
+	}
+	if routing.DefaultServerID < 0 || routing.AlternateServerID < 0 {
+		return fmt.Errorf("watcher routing server IDs must be non-negative")
+	}
+	return nil
 }
 
 func preserveRestartOnly(old, next *Config) {
@@ -257,13 +291,4 @@ func logChanges(old, cur any, prefix string) {
 			log.Debug(context.Background(), "config_field_changed", "Configuration field changed", zap.String("field", fieldName))
 		}
 	}
-}
-
-// Load reads a configuration file and environment overrides.
-func Load(path string) (*Config, error) {
-	v, err := configuredViper(path)
-	if err != nil {
-		return nil, err
-	}
-	return load(v)
 }

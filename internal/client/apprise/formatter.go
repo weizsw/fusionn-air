@@ -3,69 +3,60 @@ package apprise
 import (
 	"fmt"
 	"strings"
+	"unicode/utf8"
 )
 
-// SlackFormatter formats messages for Slack readability
-type SlackFormatter struct{}
+const notificationLimit = 1800
 
-// FormatWatcherResults formats watcher results for Slack
-func (f *SlackFormatter) FormatWatcherResults(requested, skipped, errors int, details []WatcherDetail) string {
-	var sb strings.Builder
-
-	// Categorize
-	var requestedItems []WatcherDetail
-	var skippedItems []WatcherDetail
-	var errorItems []WatcherDetail
-
-	for _, d := range details {
-		switch d.Action {
-		case "requested", "dry_run":
-			requestedItems = append(requestedItems, d)
-		case "error":
-			errorItems = append(errorItems, d)
-		default:
-			skippedItems = append(skippedItems, d)
-		}
-	}
-
-	// Requested section
-	if len(requestedItems) > 0 {
-		fmt.Fprintf(&sb, "*📥 REQUESTED (%d):*\n", len(requestedItems))
-		for _, item := range requestedItems {
-			routeTag := ""
-			if item.Route != "" {
-				routeTag = fmt.Sprintf(" [→ %s]", item.Route)
+// FormatWatcherResults lists errors and requests. Skipped seasons appear in the counts.
+func FormatWatcherResults(requested, skipped, errors int, details []WatcherDetail) string {
+	var body strings.Builder
+	fmt.Fprintf(&body, "Requests: %d · Skipped: %d · Errors: %d\n", requested, skipped, errors)
+	omitted := 0
+	for _, errorSection := range []bool{true, false} {
+		for _, item := range details {
+			if (item.Action == "error") != errorSection {
+				continue
 			}
-			fmt.Fprintf(&sb, "• %s S%02d ← %s%s\n", item.ShowTitle, item.Season, item.Reason, routeTag)
-		}
-		sb.WriteString("\n")
-	}
-
-	// Skipped section
-	if len(skippedItems) > 0 {
-		fmt.Fprintf(&sb, "*SKIPPED (%d):*\n", len(skippedItems))
-		for _, item := range skippedItems {
-			fmt.Fprintf(&sb, "• %s S%02d ← %s\n", item.ShowTitle, item.Season, item.Reason)
-		}
-		sb.WriteString("\n")
-	}
-
-	// Errors section
-	if len(errorItems) > 0 {
-		fmt.Fprintf(&sb, "*ERRORS (%d):*\n", len(errorItems))
-		for _, item := range errorItems {
-			fmt.Fprintf(&sb, "• %s S%02d ← %s\n", item.ShowTitle, item.Season, item.Reason)
+			line := fmt.Sprintf("• %s S%02d · %s · %s", item.ShowTitle, item.Season, item.Action, item.Reason)
+			if item.Route != "" {
+				line += " [" + item.Route + "]"
+			}
+			line = truncate(line, 400) + "\n"
+			if body.Len()+len(line) > notificationLimit-60 {
+				omitted++
+				continue
+			}
+			body.WriteString(line)
 		}
 	}
-
-	return sb.String()
+	if omitted > 0 {
+		fmt.Fprintf(&body, "… %d more. See watcher stats.", omitted)
+	}
+	return body.String()
 }
 
-// WatcherDetail represents a single watcher result item
+// LimitNotification leaves room for the title in Discord's 2000-character limit.
+func LimitNotification(text string) string {
+	return truncate(text, notificationLimit)
+}
+
+func truncate(text string, limit int) string {
+	if len(text) <= limit {
+		return text
+	}
+	end := limit - len("…")
+	for !utf8.RuneStart(text[end]) {
+		end--
+	}
+	return text[:end] + "…"
+}
+
+// WatcherDetail represents a request or a failed season check.
 type WatcherDetail struct {
 	ShowTitle string
 	Season    int
 	Action    string
 	Reason    string
-	Route     string // "default", "alternate", or "" (no routing)
+	Route     string
 }

@@ -1,6 +1,6 @@
 # Fusionn-Air
 
-Fusionn-Air requests upcoming TV seasons through Seerr or Overseerr. It uses your Scrob or Trakt calendar and watch history to decide when to request the next season. Apprise can send a summary after each run.
+Fusionn-Air requests upcoming TV seasons through Seerr or Overseerr. It uses your Scrob or Trakt calendar and watch history to decide when to request the next season. Apprise can send run summaries and failures.
 
 ## Quick start
 
@@ -14,41 +14,46 @@ For Trakt, set `watcher.source: trakt` and enter your Trakt app client ID and se
 
 Set `overseerr.base_url` to the Seerr or Overseerr web URL and `overseerr.api_key` to its API key. If Fusionn-Air runs in Docker, use URLs that the container can reach. Use a shared network service name or a host address to reach services outside that container.
 
-Keep `scheduler.dry_run: true` while you check which seasons qualify. For a manual test, set `scheduler.run_on_start: false` and start Fusionn-Air.
+Keep `scheduler.dry_run: true` while you check which seasons qualify. For a manual test, set `scheduler.run_on_start: false`. Set `server.trigger_api_key` to a separate secret and store the same value in `AIR_TRIGGER_KEY`. Start Fusionn-Air.
 
 ```bash
 go run ./cmd/fusionn-air
 ```
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/watcher/run
+curl -X POST -H "X-API-Key: $AIR_TRIGGER_KEY" http://localhost:8080/api/v1/watcher/run
+curl http://localhost:8080/api/v1/watcher/stats
 ```
 
 If the dry-run results look right, set `scheduler.dry_run: false` to send requests. Docker Compose exposes the API on port `4554`.
 
 ## Request rules
 
-- The watcher reads upcoming episodes from the selected calendar. In Scrob mode, a show must have a completed episode in your watch history. Scrob episodes must use TMDB-compatible numbering.
-- The watcher requires every episode of the previous season to have aired. You must also have watched every episode.
+- The watcher checks seasons with an episode scheduled today or later within `watcher.calendar_days`. Seasons with all episodes outside this window are not candidates. In Scrob mode, a show must have a completed episode in your watch history. Scrob episodes must use TMDB-compatible numbering.
+- The watcher requires every episode of the previous season to have aired. You must also have watched every episode, including any recap listed as a regular episode.
 - In Scrob mode, the watcher reads the episode count and air dates from Scrob. It skips seasons with missing details or a season order other than TMDB aired order.
-- The watcher skips first seasons if you only watched specials. In Trakt mode, it also skips hidden seasons.
-- `watcher.excluded_genres` and `watcher.allowed_languages` filter both sources. If an enabled filter needs metadata that is missing, the watcher skips the series.
-- The watcher skips seasons that you already started, requested, or have available.
-- If you configure `watcher.routing`, the watcher uses genres and countries to pick a server. The Scrob path reads these fields from Seerr or Overseerr. Japanese animation also matches the `anime` rule.
+- The watcher skips specials and first seasons if you only watched specials. In Trakt mode, it also skips hidden seasons and uses your current watch progress after a reset.
+- `watcher.excluded_genres` and `watcher.allowed_languages` use Seerr or Overseerr metadata for both sources. If an enabled filter needs metadata that is missing, the watcher skips the series.
+- The watcher skips seasons you already started and seasons with a pending or approved regular-quality request or available media. A 4K-only request does not block a regular-quality request. The watcher skips declined, blocklisted, and deleted seasons. It reports failed requests with the Seerr or Overseerr request ID.
+- If you configure `watcher.routing`, the watcher uses genres and countries from Seerr or Overseerr to select a server. Animation from Japan also matches `anime`. Animation from China also matches `donghua`.
 
 ## API endpoints
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/api/v1/health` | Health check |
-| GET | `/api/v1/watcher/stats` | Watcher statistics |
-| POST | `/api/v1/watcher/run` | Run the watcher. Returns HTTP 409 if a run is already active. |
+| GET | `/api/v1/watcher/stats` | Whether a run is active, the last run results, and any error that stopped that run. |
+| POST | `/api/v1/watcher/run` | Start a background run. Send `X-API-Key`. Returns HTTP 202 if accepted or HTTP 409 if a run is active. |
+
+The legacy `POST /api/v1/process` uses the same authentication and response. If `server.trigger_api_key` is empty, the POST endpoints return HTTP 503.
 
 ## Configuration
 
 See [the example configuration](config/config.example.yaml) for all fields. Restart Fusionn-Air after you change the watch source or API credentials.
 
-Use `FUSIONN_AIR_WATCHER_SOURCE`, `FUSIONN_AIR_SCROB_BASE_URL`, `FUSIONN_AIR_SCROB_API_KEY`, and `FUSIONN_AIR_OVERSEERR_API_KEY` to override these values in the process environment. For Trakt, use `FUSIONN_AIR_TRAKT_CLIENT_ID` and `FUSIONN_AIR_TRAKT_CLIENT_SECRET`.
+Use `FUSIONN_AIR_WATCHER_SOURCE`, `FUSIONN_AIR_SCROB_BASE_URL`, `FUSIONN_AIR_SCROB_API_KEY`, and `FUSIONN_AIR_OVERSEERR_API_KEY` to override these values in the process environment. For Trakt, use `FUSIONN_AIR_TRAKT_CLIENT_ID` and `FUSIONN_AIR_TRAKT_CLIENT_SECRET`. Use `FUSIONN_AIR_SERVER_TRIGGER_API_KEY` to set the manual run key in the process environment.
+
+If Trakt rejects the refresh token, Fusionn-Air starts device authorization. Open the verification URL and enter the user code from the service log.
 
 ## Notifications (Apprise)
 

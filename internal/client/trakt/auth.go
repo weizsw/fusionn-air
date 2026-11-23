@@ -3,7 +3,9 @@ package trakt
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -14,13 +16,11 @@ import (
 	"go.uber.org/zap"
 
 	httpclient "github.com/fusionn-air/internal/client"
-	"github.com/fusionn-air/pkg/logger"
 )
 
-const (
-	tokenFile       = "data/trakt_tokens.json"
-	tokenExpirySafe = 24 * time.Hour // Refresh 1 day before expiry
-)
+const tokenFile = "data/trakt_tokens.json"
+
+var errInvalidGrant = errors.New("refresh token rejected by Trakt")
 
 // TokenStore holds OAuth tokens
 type TokenStore struct {
@@ -56,9 +56,11 @@ type AuthManager struct {
 	clientSecret string
 	baseURL      string
 
-	mu         sync.RWMutex
+	mu         sync.Mutex
+	tokenPath  string
 	tokens     *TokenStore
-	retryAfter time.Time // Rate limit retry-after for OAuth endpoints
+	retryAfter time.Time
+	lastError  error
 }
 
 // NewAuthManager creates a new auth manager
@@ -66,105 +68,72 @@ func NewAuthManager(clientID, clientSecret, baseURL string) *AuthManager {
 	return &AuthManager{
 		client: httpclient.NewHTTP().
 			SetTimeout(30*time.Second).
-			SetHeader("Content-Type", "application/json").
-			SetRetryCount(2).
-			SetRetryWaitTime(5 * time.Second),
+			SetHeader("Content-Type", "application/json"),
 		clientID:     clientID,
 		clientSecret: clientSecret,
 		baseURL:      baseURL,
+		tokenPath:    tokenFile,
 	}
 }
 
-// Initialize loads tokens or starts device auth flow
+// Initialize loads the token file and authorizes the client if needed.
 func (a *AuthManager) Initialize(ctx context.Context) error {
-	// Try to load existing tokens
-	if err := a.loadTokens(); err == nil {
-		// Check if refresh needed
-		if a.needsRefresh() {
-			log.Debug(ctx, "token_expiring", "Trakt token is due for refresh")
-			if err := a.refreshTokens(ctx); err != nil {
-				log.Warn(ctx, "token_refresh_failed", "Trakt authorization is required", zap.Error(err))
-				return a.startDeviceAuth(ctx)
-			}
-		}
-		return nil
+	a.mu.Lock()
+	if err := a.loadTokens(); err != nil && !errors.Is(err, os.ErrNotExist) {
+		log.Warn(ctx, "token_load_failed", "Could not load stored Trakt tokens", zap.Error(err))
 	}
-
-	// No tokens - start device auth
-	return a.startDeviceAuth(ctx)
+	a.mu.Unlock()
+	_, err := a.accessToken(ctx)
+	return err
 }
 
-// GetAccessToken returns the current access token
-func (a *AuthManager) GetAccessToken() string {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-
-	if a.tokens == nil {
-		return ""
-	}
-	return a.tokens.AccessToken
-}
-
-// IsAuthenticated returns true if we have valid tokens
-func (a *AuthManager) IsAuthenticated() bool {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-
-	return a.tokens != nil && a.tokens.AccessToken != ""
-}
-
-// needsRefresh checks if token refresh is needed
-func (a *AuthManager) needsRefresh() bool {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-
-	if a.tokens == nil {
-		return true
-	}
-
-	return time.Now().Add(tokenExpirySafe).After(a.tokens.ExpiresAt)
-}
-
-// loadTokens loads tokens from file
 func (a *AuthManager) loadTokens() error {
-	data, err := os.ReadFile(tokenFile)
+	data, err := os.ReadFile(a.tokenPath)
 	if err != nil {
 		return err
 	}
-
 	var tokens TokenStore
 	if err := json.Unmarshal(data, &tokens); err != nil {
 		return err
 	}
-
-	a.mu.Lock()
-	a.tokens = &tokens
-	a.mu.Unlock()
-
+	if tokens.AccessToken != "" && !tokens.ExpiresAt.IsZero() {
+		a.tokens = &tokens
+	}
 	return nil
 }
 
-// saveTokens saves tokens to file
-func (a *AuthManager) saveTokens() error {
-	a.mu.RLock()
-	tokens := a.tokens
-	a.mu.RUnlock()
-
-	if tokens == nil {
-		return fmt.Errorf("no tokens to save")
+func (a *AuthManager) storeToken(token TokenResponse) error {
+	if token.AccessToken == "" || token.RefreshToken == "" || token.ExpiresIn <= 0 {
+		return fmt.Errorf("incomplete OAuth token from Trakt")
 	}
-
-	dir := filepath.Dir(tokenFile)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("creating data dir: %w", err)
+	created := time.Now()
+	if token.CreatedAt > 0 {
+		created = time.Unix(token.CreatedAt, 0)
 	}
+	tokens := TokenStore{
+		AccessToken: token.AccessToken, RefreshToken: token.RefreshToken,
+		CreatedAt: created, ExpiresAt: created.Add(time.Duration(token.ExpiresIn) * time.Second),
+	}
+	a.tokens = &tokens
 
-	data, err := json.MarshalIndent(tokens, "", "  ")
+	dir := filepath.Dir(a.tokenPath)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("creating Trakt token directory: %w", err)
+	}
+	file, err := os.CreateTemp(dir, ".trakt-tokens-*")
 	if err != nil {
-		return err
+		return fmt.Errorf("creating Trakt token file: %w", err)
 	}
-
-	return os.WriteFile(tokenFile, data, 0o600)
+	defer os.Remove(file.Name())
+	writeErr := json.NewEncoder(file).Encode(tokens)
+	closeErr := file.Close()
+	if err := errors.Join(writeErr, closeErr); err != nil {
+		return fmt.Errorf("writing Trakt tokens: %w", err)
+	}
+	if err := os.Rename(file.Name(), a.tokenPath); err != nil {
+		return fmt.Errorf("replacing Trakt token file: %w", err)
+	}
+	return nil
 }
 
 // startDeviceAuth initiates the device authorization flow
@@ -181,7 +150,7 @@ func (a *AuthManager) startDeviceAuth(ctx context.Context) error {
 		return fmt.Errorf("getting device code: %w", err)
 	}
 
-	if resp.IsError() {
+	if !resp.IsSuccess() {
 		return fmt.Errorf("getting device code: HTTP %d", resp.StatusCode())
 	}
 
@@ -208,17 +177,7 @@ func (a *AuthManager) startDeviceAuth(ctx context.Context) error {
 		}
 
 		if token != nil {
-			a.mu.Lock()
-			a.tokens = &TokenStore{
-				AccessToken:  token.AccessToken,
-				RefreshToken: token.RefreshToken,
-				ExpiresAt:    time.Unix(token.CreatedAt, 0).Add(time.Duration(token.ExpiresIn) * time.Second),
-				CreatedAt:    time.Unix(token.CreatedAt, 0),
-			}
-			a.mu.Unlock()
-
-			_ = a.saveTokens()
-			return nil
+			return a.storeToken(*token)
 		}
 
 		if !pending {
@@ -226,7 +185,7 @@ func (a *AuthManager) startDeviceAuth(ctx context.Context) error {
 		}
 	}
 
-	return fmt.Errorf("authorization timed out - please restart and try again")
+	return fmt.Errorf("device authorization with Trakt timed out")
 }
 
 // pollToken checks if user has authorized
@@ -266,83 +225,100 @@ func (a *AuthManager) pollToken(ctx context.Context, deviceCode string) (*TokenR
 	}
 }
 
-// refreshTokens refreshes the access token
+// refreshTokens runs under a.mu. Each refresh token is sent once per attempt.
 func (a *AuthManager) refreshTokens(ctx context.Context) error {
-	// Check if we need to wait for rate limit
-	a.mu.RLock()
-	retryAfter := a.retryAfter
-	refreshToken := a.tokens.RefreshToken
-	a.mu.RUnlock()
-
-	if time.Now().Before(retryAfter) {
-		waitTime := time.Until(retryAfter)
-		log.Debug(ctx, "rate_limit_wait", "Waiting for Trakt OAuth rate limit reset", logger.DurMs(waitTime))
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(waitTime):
-		}
-	}
-
 	log.Debug(ctx, "token_refresh_started", "Refreshing Trakt access token")
-
 	var token TokenResponse
+	var rejection struct {
+		Code string `json:"error"`
+	}
 	resp, err := a.client.R().
 		SetContext(ctx).
 		SetBody(map[string]string{
-			"refresh_token": refreshToken,
+			"refresh_token": a.tokens.RefreshToken,
 			"client_id":     a.clientID,
 			"client_secret": a.clientSecret,
 			"grant_type":    "refresh_token",
 		}).
 		SetResult(&token).
+		SetError(&rejection).
 		Post(a.baseURL + "/oauth/token")
-
 	if err != nil {
 		return fmt.Errorf("refreshing token: %w", err)
 	}
-
-	// Handle rate limit from response headers
-	if retryAfterStr := resp.Header().Get("Retry-After"); retryAfterStr != "" {
-		if seconds, err := strconv.Atoi(retryAfterStr); err == nil {
-			a.mu.Lock()
-			a.retryAfter = time.Now().Add(time.Duration(seconds) * time.Second)
-			a.mu.Unlock()
-			log.Warn(ctx, "rate_limited", "Trakt OAuth rate limit reached", zap.Int("retry_after_seconds", seconds))
+	if rejection.Code == "invalid_grant" {
+		return errInvalidGrant
+	}
+	if resp.StatusCode() == http.StatusTooManyRequests {
+		if retry := resp.Header().Get("Retry-After"); retry != "" {
+			if seconds, err := strconv.Atoi(retry); err == nil && seconds > 0 {
+				a.retryAfter = time.Now().Add(time.Duration(seconds) * time.Second)
+			} else if until, err := http.ParseTime(retry); err == nil {
+				a.retryAfter = until
+			}
 		}
+		return fmt.Errorf("OAuth rate limit exceeded by Trakt")
 	}
-
-	if resp.StatusCode() == 429 {
-		// Set default retry after if header wasn't present
-		a.mu.Lock()
-		if a.retryAfter.Before(time.Now()) {
-			a.retryAfter = time.Now().Add(60 * time.Second)
-		}
-		a.mu.Unlock()
-		return fmt.Errorf("oauth rate limit exceeded")
+	if !resp.IsSuccess() {
+		return fmt.Errorf("refresh request returned HTTP %d", resp.StatusCode())
 	}
-
-	if resp.IsError() {
-		return fmt.Errorf("refreshing token: HTTP %d", resp.StatusCode())
+	if err := a.storeToken(token); err != nil {
+		return err
 	}
-
-	a.mu.Lock()
-	a.tokens = &TokenStore{
-		AccessToken:  token.AccessToken,
-		RefreshToken: token.RefreshToken,
-		ExpiresAt:    time.Unix(token.CreatedAt, 0).Add(time.Duration(token.ExpiresIn) * time.Second),
-		CreatedAt:    time.Unix(token.CreatedAt, 0),
-	}
-	a.mu.Unlock()
-
 	log.Debug(ctx, "token_refresh_completed", "Trakt access token refreshed")
-	return a.saveTokens()
+	return nil
 }
 
-// EnsureValidToken checks and refreshes token if needed
-func (a *AuthManager) EnsureValidToken(ctx context.Context) error {
-	if a.needsRefresh() {
-		return a.refreshTokens(ctx)
+func (a *AuthManager) accessToken(ctx context.Context) (string, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return "", err
 	}
-	return nil
+
+	now := time.Now()
+	if a.tokens != nil {
+		lifetime := a.tokens.ExpiresAt.Sub(a.tokens.CreatedAt)
+		lead := min(5*time.Minute, max(0, lifetime/10))
+		if now.Add(lead).Before(a.tokens.ExpiresAt) {
+			return a.tokens.AccessToken, nil
+		}
+	}
+	if now.Before(a.retryAfter) {
+		if a.tokens != nil && now.Before(a.tokens.ExpiresAt) {
+			return a.tokens.AccessToken, nil
+		}
+		return "", a.lastError
+	}
+
+	previous := a.tokens
+	var err error
+	if a.tokens != nil && a.tokens.RefreshToken != "" {
+		err = a.refreshTokens(ctx)
+		if errors.Is(err, errInvalidGrant) {
+			log.Warn(ctx, "token_refresh_rejected", "Trakt rejected the refresh token. Starting device authorization")
+			a.tokens = nil
+		}
+	}
+	if a.tokens == nil || a.tokens.RefreshToken == "" {
+		if deviceErr := a.startDeviceAuth(ctx); deviceErr != nil {
+			err = fmt.Errorf("authorization with Trakt required: %w", deviceErr)
+		} else {
+			err = nil
+		}
+	}
+	if err == nil {
+		a.retryAfter = time.Time{}
+		a.lastError = nil
+		return a.tokens.AccessToken, nil
+	}
+	a.lastError = err
+	if !a.retryAfter.After(time.Now()) {
+		a.retryAfter = time.Now().Add(time.Minute)
+	}
+	log.Warn(ctx, "token_refresh_failed", "Could not renew Trakt authorization", zap.Error(err))
+	if a.tokens != nil && a.tokens == previous && time.Now().Before(a.tokens.ExpiresAt) && ctx.Err() == nil {
+		return a.tokens.AccessToken, nil
+	}
+	return "", err
 }

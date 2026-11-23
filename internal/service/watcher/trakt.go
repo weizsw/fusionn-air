@@ -28,16 +28,21 @@ func (s *traktSource) upcoming(ctx context.Context, days int) ([]calendarItem, e
 	}
 	items := make([]calendarItem, 0, len(entries))
 	for _, entry := range entries {
+		if entry.Episode.Season < 1 || entry.Episode.Number < 1 {
+			continue
+		}
 		items = append(items, calendarItem{
 			tmdbID: entry.Show.IDs.TMDB, title: entry.Show.Title, season: entry.Episode.Season,
-			episode: entry.Episode.Number, airDate: entry.FirstAired, genres: entry.Show.Genres,
-			countries: []string{entry.Show.Country}, language: entry.Show.Language,
+			episode: entry.Episode.Number, airDate: entry.FirstAired, metadataBeforeProgress: true,
 			eligible: func(ctx context.Context) (bool, string, error) {
 				progress, err := s.client.GetShowProgress(ctx, entry.Show.IDs.Trakt)
 				if err != nil {
 					return false, "", err
 				}
-				seasons, _ := s.client.GetShowSeasons(ctx, entry.Show.IDs.Trakt)
+				seasons, err := s.client.GetShowSeasons(ctx, entry.Show.IDs.Trakt)
+				if err != nil {
+					return false, "", fmt.Errorf("getting Trakt season counts: %w", err)
+				}
 				ok, reason := shouldRequestSeason(progress, seasons, entry.Episode.Season)
 				return ok, reason, nil
 			},

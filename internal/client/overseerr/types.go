@@ -17,39 +17,20 @@ const (
 	MediaStatusProcessing     MediaStatus = 3
 	MediaStatusPartiallyAvail MediaStatus = 4
 	MediaStatusAvailable      MediaStatus = 5
+	MediaStatusBlocklisted    MediaStatus = 6
+	MediaStatusDeleted        MediaStatus = 7
 )
 
 // RequestStatus represents request status
 type RequestStatus int
 
 const (
-	RequestStatusPending  RequestStatus = 1
-	RequestStatusApproved RequestStatus = 2
-	RequestStatusDeclined RequestStatus = 3
+	RequestStatusPending   RequestStatus = 1
+	RequestStatusApproved  RequestStatus = 2
+	RequestStatusDeclined  RequestStatus = 3
+	RequestStatusFailed    RequestStatus = 4
+	RequestStatusCompleted RequestStatus = 5
 )
-
-// SearchResult from Overseerr search API
-type SearchResult struct {
-	Page         int           `json:"page"`
-	TotalPages   int           `json:"totalPages"`
-	TotalResults int           `json:"totalResults"`
-	Results      []MediaResult `json:"results"`
-}
-
-type MediaResult struct {
-	ID            int        `json:"id"`
-	MediaType     string     `json:"mediaType"`
-	Name          string     `json:"name,omitempty"`  // TV shows
-	Title         string     `json:"title,omitempty"` // Movies
-	OriginalName  string     `json:"originalName,omitempty"`
-	OriginalTitle string     `json:"originalTitle,omitempty"`
-	Overview      string     `json:"overview"`
-	PosterPath    string     `json:"posterPath"`
-	BackdropPath  string     `json:"backdropPath"`
-	FirstAirDate  string     `json:"firstAirDate,omitempty"`
-	ReleaseDate   string     `json:"releaseDate,omitempty"`
-	MediaInfo     *MediaInfo `json:"mediaInfo,omitempty"`
-}
 
 type MediaInfo struct {
 	ID       int          `json:"id"`
@@ -69,6 +50,7 @@ type SeasonInfo struct {
 type Request struct {
 	ID          int           `json:"id"`
 	Status      RequestStatus `json:"status"`
+	Is4K        bool          `json:"is4k"`
 	Media       *MediaInfo    `json:"media,omitempty"`
 	Seasons     []SeasonReq   `json:"seasons,omitempty"`
 	RequestedBy *User         `json:"requestedBy,omitempty"`

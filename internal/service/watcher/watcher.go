@@ -1,6 +1,7 @@
 package watcher
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -44,9 +45,10 @@ type Service struct {
 	apprise   notificationAdapter
 	cfgMgr    configSource
 
-	runMu       sync.Mutex
 	mu          sync.RWMutex
+	running     bool
 	lastRun     time.Time
+	lastError   string
 	lastResults []ProcessResult
 }
 
@@ -77,11 +79,48 @@ func newService(source Source, overseerrClient overseerrAdapter, notification no
 
 // ProcessCalendar checks the calendar and requests new seasons as needed
 func (s *Service) ProcessCalendar(ctx context.Context) ([]ProcessResult, error) {
-	if !s.runMu.TryLock() {
+	if !s.beginRun() {
 		return nil, ErrAlreadyRunning
 	}
-	defer s.runMu.Unlock()
+	defer s.endRun()
+	return s.processCalendar(ctx)
+}
 
+// StartCalendar accepts one asynchronous run and returns a channel that closes when it ends.
+func (s *Service) StartCalendar(ctx context.Context) (<-chan struct{}, error) {
+	if !s.beginRun() {
+		return nil, ErrAlreadyRunning
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		defer s.endRun()
+		runCtx, cancel := context.WithTimeout(ctx, 15*time.Minute)
+		defer cancel()
+		if _, err := s.processCalendar(runCtx); err != nil {
+			log.Error(runCtx, "watcher_failed", "Watcher run failed", zap.Error(err))
+		}
+	}()
+	return done, nil
+}
+
+func (s *Service) beginRun() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.running {
+		return false
+	}
+	s.running = true
+	return true
+}
+
+func (s *Service) endRun() {
+	s.mu.Lock()
+	s.running = false
+	s.mu.Unlock()
+}
+
+func (s *Service) processCalendar(ctx context.Context) ([]ProcessResult, error) {
 	// Get fresh config for this run (supports hot-reload)
 	cfg := s.cfgMgr.Get()
 	dryRun := cfg.Scheduler.DryRun
@@ -93,37 +132,52 @@ func (s *Service) ProcessCalendar(ctx context.Context) ([]ProcessResult, error) 
 		zap.Int("calendar_days", calendarDays), zap.Bool("dry_run", dryRun))
 	calendarItems, err := s.source.upcoming(ctx, calendarDays)
 	if err != nil {
-		return nil, fmt.Errorf("getting calendar: %w", err)
+		err = fmt.Errorf("getting calendar: %w", err)
+		s.failRun(ctx, nil, err)
+		return nil, err
 	}
-
-	if len(calendarItems) == 0 {
-		log.Info(ctx, "watcher_completed", "No upcoming episodes", zap.Int("candidates", 0), logger.DurMs(time.Since(startTime)))
-		return nil, nil
-	}
-
-	showSeasons := s.groupByShowAndSeason(calendarItems)
 
 	var results []ProcessResult
-
-	// Process each show/season silently
-	for _, item := range showSeasons {
-		result := s.processShow(ctx, item, dryRun, cfg.Watcher)
-		results = append(results, result)
+	for _, item := range groupByShowAndSeason(calendarItems) {
+		if err := ctx.Err(); err != nil {
+			s.failRun(ctx, results, err)
+			return results, err
+		}
+		results = append(results, s.processShow(ctx, item, dryRun, cfg.Watcher))
+	}
+	if err := ctx.Err(); err != nil {
+		s.failRun(ctx, results, err)
+		return results, err
 	}
 
-	// Store results
+	s.recordRun(results, nil)
+	logResults(ctx, results, startTime, dryRun)
+	if len(results) > 0 {
+		s.sendNotification(ctx, results, dryRun)
+	}
+	return results, nil
+}
+
+func (s *Service) failRun(ctx context.Context, results []ProcessResult, err error) {
+	s.recordRun(results, err)
+	if errors.Is(ctx.Err(), context.Canceled) {
+		return
+	}
+	notifyCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	s.notify(notifyCtx, "Watcher run failed", logger.Redact(err.Error()), "failure")
+}
+
+func (s *Service) recordRun(results []ProcessResult, err error) {
+	message := ""
+	if err != nil {
+		message = logger.Redact(err.Error())
+	}
 	s.mu.Lock()
 	s.lastRun = time.Now()
-	s.lastResults = results
+	s.lastError = message
+	s.lastResults = slices.Clone(results)
 	s.mu.Unlock()
-
-	// Print summary
-	logResults(ctx, results, startTime, dryRun)
-
-	// Send notification
-	s.sendNotification(ctx, results, dryRun)
-
-	return results, nil
 }
 
 func logResults(ctx context.Context, results []ProcessResult, startTime time.Time, dryRun bool) {
@@ -155,28 +209,25 @@ func (s *Service) sendNotification(ctx context.Context, results []ProcessResult,
 		return
 	}
 
-	// Count results
 	var requested, skipped, errCount int
+	var details []apprise.WatcherDetail
 	for _, r := range results {
+		reason := r.Reason
 		switch r.Action {
 		case "requested", "dry_run":
 			requested++
-		case "skipped", "already_requested":
-			skipped++
 		case "error":
 			errCount++
+			reason = logger.Redact(r.Error)
+		default:
+			skipped++
+			continue
 		}
-	}
-
-	// Build notification
-	formatter := &apprise.SlackFormatter{}
-	var details []apprise.WatcherDetail
-	for _, r := range results {
 		details = append(details, apprise.WatcherDetail{
 			ShowTitle: r.ShowTitle,
 			Season:    r.Season,
 			Action:    r.Action,
-			Reason:    r.Reason,
+			Reason:    reason,
 			Route:     r.Route,
 		})
 	}
@@ -186,7 +237,7 @@ func (s *Service) sendNotification(ctx context.Context, results []ProcessResult,
 		title = "📺 Watcher Results (DRY RUN)"
 	}
 
-	body := formatter.FormatWatcherResults(requested, skipped, errCount, details)
+	body := apprise.FormatWatcherResults(requested, skipped, errCount, details)
 
 	notifyType := "info"
 	if requested > 0 {
@@ -196,7 +247,14 @@ func (s *Service) sendNotification(ctx context.Context, results []ProcessResult,
 		notifyType = "warning"
 	}
 
-	if err := s.apprise.Notify(ctx, title, body, notifyType); err != nil {
+	s.notify(ctx, title, body, notifyType)
+}
+
+func (s *Service) notify(ctx context.Context, title, body, notifyType string) {
+	if s.apprise == nil || !s.apprise.IsEnabled() {
+		return
+	}
+	if err := s.apprise.Notify(ctx, title, apprise.LimitNotification(body), notifyType); err != nil {
 		log.Warn(ctx, "notification_failed", "Could not send watcher results", zap.Error(err))
 	} else {
 		log.Info(ctx, "notification_sent", "Watcher results sent")
@@ -208,27 +266,30 @@ type Source interface {
 }
 
 type calendarItem struct {
-	tmdbID             int
-	title              string
-	season             int
-	episode            int
-	airDate            time.Time
-	genres             []string
-	countries          []string
-	language           string
-	routeWithOverseerr bool
-	eligible           func(context.Context) (bool, string, error)
+	tmdbID                 int
+	title                  string
+	season                 int
+	episode                int
+	airDate                time.Time
+	metadataBeforeProgress bool
+	eligible               func(context.Context) (bool, string, error)
 }
 
-func (s *Service) groupByShowAndSeason(items []calendarItem) map[[2]int]calendarItem {
-	result := make(map[[2]int]calendarItem)
+func groupByShowAndSeason(items []calendarItem) []calendarItem {
+	slices.SortFunc(items, func(a, b calendarItem) int {
+		return cmp.Or(a.airDate.Compare(b.airDate), cmp.Compare(a.tmdbID, b.tmdbID),
+			cmp.Compare(a.season, b.season), cmp.Compare(a.episode, b.episode), cmp.Compare(a.title, b.title))
+	})
+	seen := make(map[[2]int]bool)
+	unique := items[:0]
 	for _, item := range items {
 		key := [2]int{item.tmdbID, item.season}
-		if _, exists := result[key]; !exists {
-			result[key] = item
+		if !seen[key] {
+			seen[key] = true
+			unique = append(unique, item)
 		}
 	}
-	return result
+	return unique
 }
 
 func exclusionReason(genres []string, language string, cfg config.WatcherConfig) string {
@@ -265,28 +326,24 @@ func (s *Service) processShow(ctx context.Context, item calendarItem, dryRun boo
 		AirDate:   item.airDate,
 	}
 
-	// Determine routing
-	var serverID *int
-	if !item.routeWithOverseerr {
-		if reason := exclusionReason(item.genres, item.language, cfg); reason != "" {
-			result.Action = "skipped"
-			result.Reason = reason
-			return result
-		}
-		serverID, result.Route = determineServerID(item.genres, item.countries, cfg.Routing)
-	}
-
-	// Skip if no TMDB ID (can't request without it)
-	if item.tmdbID == 0 {
+	if item.tmdbID <= 0 {
 		result.Action = "skipped"
 		result.Reason = "no TMDB ID"
 		return result
 	}
 
+	var serverID *int
+	if item.metadataBeforeProgress {
+		serverID = s.checkOverseerr(ctx, item, cfg, &result)
+		if result.Action != "" {
+			return result
+		}
+	}
+
 	shouldRequest, reason, err := item.eligible(ctx)
 	if err != nil {
 		result.Action = "error"
-		result.Error = fmt.Sprintf("failed to check season eligibility: %v", err)
+		result.Error = logger.Redact(fmt.Sprintf("failed to check season eligibility: %v", err))
 		return result
 	}
 	if !shouldRequest {
@@ -295,43 +352,11 @@ func (s *Service) processShow(ctx context.Context, item calendarItem, dryRun boo
 		return result
 	}
 
-	// Check Overseerr if already requested/available
-	tvDetails, err := s.overseerr.GetTVByTMDB(ctx, item.tmdbID)
-	if err != nil {
-		result.Action = "error"
-		result.Error = fmt.Sprintf("Overseerr error: %v", err)
-		return result
-	}
-
-	if item.routeWithOverseerr {
-		var genres []string
-		for _, genre := range tvDetails.Genres {
-			genres = append(genres, genre.Name)
-			if strings.EqualFold(genre.Name, "Animation") && slices.ContainsFunc(tvDetails.OriginCountry, func(country string) bool {
-				return strings.EqualFold(country, "JP")
-			}) {
-				genres = append(genres, "anime")
-			}
-		}
-		if reason := exclusionReason(genres, tvDetails.OriginalLanguage, cfg); reason != "" {
-			result.Action = "skipped"
-			result.Reason = reason
+	if !item.metadataBeforeProgress {
+		serverID = s.checkOverseerr(ctx, item, cfg, &result)
+		if result.Action != "" {
 			return result
 		}
-		serverID, result.Route = determineServerID(genres, tvDetails.OriginCountry, cfg.Routing)
-	}
-
-	requestInfo := s.overseerr.GetSeasonRequestInfo(tvDetails, item.season)
-	if requestInfo.Requested {
-		result.Action = "already_requested"
-		if requestInfo.RequestedBy != "" {
-			result.Reason = fmt.Sprintf("already requested by %s", requestInfo.RequestedBy)
-		} else if requestInfo.Status >= 4 { // Available or partially available
-			result.Reason = "already available in Overseerr"
-		} else {
-			result.Reason = "already requested in Overseerr"
-		}
-		return result
 	}
 
 	// In dry-run mode, don't actually request
@@ -345,13 +370,70 @@ func (s *Service) processShow(ctx context.Context, item calendarItem, dryRun boo
 	_, err = s.overseerr.RequestTV(ctx, item.tmdbID, []int{item.season}, serverID)
 	if err != nil {
 		result.Action = "error"
-		result.Error = fmt.Sprintf("request failed: %v", err)
+		result.Error = logger.Redact(fmt.Sprintf("request failed: %v", err))
 		return result
 	}
 
 	result.Action = "requested"
 	result.Reason = reason
 	return result
+}
+
+func (s *Service) checkOverseerr(ctx context.Context, item calendarItem, cfg config.WatcherConfig, result *ProcessResult) *int {
+	details, err := s.overseerr.GetTVByTMDB(ctx, item.tmdbID)
+	if err != nil {
+		result.Action = "error"
+		result.Error = logger.Redact(fmt.Sprintf("Overseerr error: %v", err))
+		return nil
+	}
+
+	var genres []string
+	for _, genre := range details.Genres {
+		genres = append(genres, genre.Name)
+		if strings.EqualFold(genre.Name, "Animation") {
+			for _, country := range details.OriginCountry {
+				switch strings.ToUpper(country) {
+				case "JP":
+					genres = append(genres, "anime")
+				case "CN":
+					genres = append(genres, "donghua")
+				}
+			}
+		}
+	}
+	if reason := exclusionReason(genres, details.OriginalLanguage, cfg); reason != "" {
+		result.Action = "skipped"
+		result.Reason = reason
+		return nil
+	}
+	serverID, route := determineServerID(genres, details.OriginCountry, cfg.Routing)
+	result.Route = route
+
+	request := s.overseerr.GetSeasonRequestInfo(details, item.season)
+	switch request.State {
+	case overseerr.SeasonRequestActive:
+		result.Action = "already_requested"
+		result.Reason = "already requested in Overseerr"
+		if request.RequestedBy != "" {
+			result.Reason = "already requested by " + request.RequestedBy
+		}
+	case overseerr.SeasonRequestAvailable:
+		result.Action = "already_requested"
+		result.Reason = "already available in Overseerr"
+	case overseerr.SeasonRequestFailed:
+		result.Action = "error"
+		result.Error = fmt.Sprintf("Overseerr request %d failed. Check the request in Seerr or Overseerr.", request.RequestID)
+	case overseerr.SeasonRequestDeclined:
+		result.Action = "skipped"
+		result.Reason = "request declined in Overseerr"
+	case overseerr.SeasonRequestBlocklisted:
+		result.Action = "skipped"
+		result.Reason = "blocklisted in Overseerr"
+	case overseerr.SeasonRequestDeleted:
+		result.Action = "skipped"
+		result.Reason = "marked deleted in Overseerr"
+	}
+	return serverID
 }
 
 // determineServerID checks show genres and country against routing config
@@ -386,16 +468,11 @@ func determineServerID(genres, countries []string, routing config.RoutingConfig)
 	return &id, "default"
 }
 
-// GetLastRun returns the last run time and results
-func (s *Service) GetLastRun() (time.Time, []ProcessResult) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.lastRun, s.lastResults
-}
-
 // Stats returns processing statistics
 type Stats struct {
 	LastRun    time.Time       `json:"last_run"`
+	Running    bool            `json:"running"`
+	LastError  string          `json:"last_error,omitempty"`
 	TotalShows int             `json:"total_shows"`
 	Requested  int             `json:"requested"`
 	Skipped    int             `json:"skipped"`
@@ -409,8 +486,10 @@ func (s *Service) GetStats() Stats {
 
 	stats := Stats{
 		LastRun:    s.lastRun,
+		Running:    s.running,
+		LastError:  s.lastError,
 		TotalShows: len(s.lastResults),
-		Results:    s.lastResults,
+		Results:    slices.Clone(s.lastResults),
 	}
 
 	for _, r := range s.lastResults {

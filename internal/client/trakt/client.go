@@ -29,9 +29,8 @@ const (
 )
 
 type Client struct {
-	client   *resty.Client
-	auth     *AuthManager
-	clientID string
+	client *resty.Client
+	auth   *AuthManager
 
 	// Rate limiter
 	getLimiter *rate.Limiter
@@ -44,7 +43,6 @@ type Client struct {
 
 func NewClient(cfg config.TraktConfig) *Client {
 	c := &Client{
-		clientID:   cfg.ClientID,
 		getLimiter: rate.NewLimiter(rate.Limit(defaultGetRate), burstSize),
 	}
 
@@ -136,22 +134,13 @@ func (c *Client) Initialize(ctx context.Context) error {
 		return fmt.Errorf("trakt auth: %w", err)
 	}
 
-	c.client.SetAuthToken(c.auth.GetAccessToken())
-	return nil
-}
-
-// ensureAuth checks and refreshes token before requests
-func (c *Client) ensureAuth(ctx context.Context) error {
-	if err := c.auth.EnsureValidToken(ctx); err != nil {
-		return err
-	}
-	c.client.SetAuthToken(c.auth.GetAccessToken())
 	return nil
 }
 
 // GetMyShowsCalendar returns upcoming episodes for shows the user has watched
 func (c *Client) GetMyShowsCalendar(ctx context.Context, days int) ([]CalendarShow, error) {
-	if err := c.ensureAuth(ctx); err != nil {
+	token, err := c.auth.accessToken(ctx)
+	if err != nil {
 		return nil, fmt.Errorf("auth: %w", err)
 	}
 
@@ -172,6 +161,7 @@ func (c *Client) GetMyShowsCalendar(ctx context.Context, days int) ([]CalendarSh
 	var shows []CalendarShow
 	resp, err := c.client.R().
 		SetContext(ctx).
+		SetAuthToken(token).
 		SetQueryParam("extended", "full").
 		SetResult(&shows).
 		Get(path)
@@ -189,7 +179,8 @@ func (c *Client) GetMyShowsCalendar(ctx context.Context, days int) ([]CalendarSh
 
 // GetShowProgress returns detailed watch progress for a specific show
 func (c *Client) GetShowProgress(ctx context.Context, showID int) (*ShowProgress, error) {
-	if err := c.ensureAuth(ctx); err != nil {
+	token, err := c.auth.accessToken(ctx)
+	if err != nil {
 		return nil, fmt.Errorf("auth: %w", err)
 	}
 
@@ -202,6 +193,7 @@ func (c *Client) GetShowProgress(ctx context.Context, showID int) (*ShowProgress
 	var progress ShowProgress
 	resp, err := c.client.R().
 		SetContext(ctx).
+		SetAuthToken(token).
 		SetResult(&progress).
 		Get(path)
 
@@ -218,7 +210,8 @@ func (c *Client) GetShowProgress(ctx context.Context, showID int) (*ShowProgress
 
 // GetShowSeasons returns season summaries including total episode counts
 func (c *Client) GetShowSeasons(ctx context.Context, showID int) ([]SeasonSummary, error) {
-	if err := c.ensureAuth(ctx); err != nil {
+	token, err := c.auth.accessToken(ctx)
+	if err != nil {
 		return nil, fmt.Errorf("auth: %w", err)
 	}
 
@@ -231,6 +224,7 @@ func (c *Client) GetShowSeasons(ctx context.Context, showID int) ([]SeasonSummar
 	var seasons []SeasonSummary
 	resp, err := c.client.R().
 		SetContext(ctx).
+		SetAuthToken(token).
 		SetResult(&seasons).
 		Get(path)
 

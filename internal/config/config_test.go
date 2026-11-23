@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -35,7 +36,7 @@ func TestManagerGetReturnsIsolatedSnapshot(t *testing.T) {
 
 func TestReloadKeepsRestartOnlySettings(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
-	if err := os.WriteFile(path, []byte("watcher:\n  enabled: true\n  source: scrob\n  calendar_days: 3\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("overseerr:\n  base_url: http://localhost:5055/\n  api_key: fixture\nwatcher:\n  enabled: true\n  source: scrob\n  calendar_days: 3\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	manager, err := NewManager(path)
@@ -92,5 +93,39 @@ func TestManagersDoNotShareViperState(t *testing.T) {
 	}
 	if got := first.Get().Watcher.CalendarDays; got != 3 {
 		t.Fatalf("first manager reloaded calendar days %d from second manager, want 3", got)
+	}
+}
+
+func TestManagerRequiresExplicitAlternateServerAndKeepsPreviousConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	const enabled = `overseerr:
+  base_url: http://localhost:5055/
+  api_key: fixture
+watcher:
+  enabled: true
+  routing:
+    alternate_genres: [anime]
+`
+	write := func(content string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(enabled + "    alternate_server_id: 0\n")
+	manager, err := NewManager(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Stop()
+	if cfg := manager.Get(); cfg.Server.Port != 8080 || cfg.Watcher.Routing.AlternateServerID != 0 {
+		t.Fatalf("port or alternate server did not use configured/default values: %+v %+v", cfg.Server, cfg.Watcher.Routing)
+	}
+	write(enabled)
+	if err := manager.reload(); err == nil || !strings.Contains(err.Error(), "alternate_server_id") {
+		t.Fatalf("reload error = %v", err)
+	}
+	if manager.Get().Watcher.Routing.AlternateServerID != 0 {
+		t.Fatal("invalid reload changed routing")
 	}
 }

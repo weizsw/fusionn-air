@@ -96,26 +96,6 @@ func (c *Client) Notify(ctx context.Context, title, body, notifyType string) err
 	return nil
 }
 
-// NotifySuccess sends a success notification
-func (c *Client) NotifySuccess(ctx context.Context, title, body string) error {
-	return c.Notify(ctx, title, body, "success")
-}
-
-// NotifyWarning sends a warning notification
-func (c *Client) NotifyWarning(ctx context.Context, title, body string) error {
-	return c.Notify(ctx, title, body, "warning")
-}
-
-// NotifyFailure sends a failure notification
-func (c *Client) NotifyFailure(ctx context.Context, title, body string) error {
-	return c.Notify(ctx, title, body, "failure")
-}
-
-// NotifyInfo sends an info notification
-func (c *Client) NotifyInfo(ctx context.Context, title, body string) error {
-	return c.Notify(ctx, title, body, "info")
-}
-
 // IsEnabled returns whether notifications are enabled
 func (c *Client) IsEnabled() bool {
 	return c.enabled

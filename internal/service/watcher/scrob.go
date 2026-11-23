@@ -34,7 +34,7 @@ func (s *scrobSource) upcoming(ctx context.Context, days int) ([]calendarItem, e
 		}
 		items = append(items, calendarItem{
 			tmdbID: entry.ShowTMDBID, title: entry.ShowTitle, season: entry.Season,
-			episode: entry.Episode, airDate: airDate, routeWithOverseerr: true,
+			episode: entry.Episode, airDate: airDate,
 		})
 	}
 	if len(items) == 0 {

@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"crypto/sha256"
+	"crypto/subtle"
 	"errors"
 	"net/http"
 
@@ -11,14 +13,16 @@ import (
 )
 
 type Handler struct {
-	watcher   *watcher.Service
-	scheduler *scheduler.Scheduler
+	watcher    *watcher.Service
+	scheduler  *scheduler.Scheduler
+	triggerKey string
 }
 
-func New(watcherService *watcher.Service, sched *scheduler.Scheduler) *Handler {
+func New(watcherService *watcher.Service, sched *scheduler.Scheduler, triggerKey string) *Handler {
 	return &Handler{
-		watcher:   watcherService,
-		scheduler: sched,
+		watcher:    watcherService,
+		scheduler:  sched,
+		triggerKey: triggerKey,
 	}
 }
 
@@ -74,21 +78,27 @@ func (h *Handler) TriggerWatcher(c *gin.Context) {
 		return
 	}
 
-	results, err := h.watcher.ProcessCalendar(c.Request.Context())
+	if h.triggerKey == "" {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Manual runs require server.trigger_api_key"})
+		return
+	}
+	expected := sha256.Sum256([]byte(h.triggerKey))
+	presented := sha256.Sum256([]byte(c.GetHeader("X-API-Key")))
+	if subtle.ConstantTimeCompare(expected[:], presented[:]) != 1 {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid or missing API key"})
+		return
+	}
+
+	err := h.scheduler.RunNow(c.Request.Context())
 	if errors.Is(err, watcher.ErrAlreadyRunning) {
 		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 		return
 	}
 	if err != nil {
-		_ = c.Error(err)
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": err.Error(),
-		})
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Watcher unavailable"})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"message": "watcher processing complete",
-		"results": results,
-	})
+	c.Header("Location", "/api/v1/watcher/stats")
+	c.JSON(http.StatusAccepted, gin.H{"message": "Watcher run accepted"})
 }
